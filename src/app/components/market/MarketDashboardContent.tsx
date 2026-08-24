@@ -45,6 +45,8 @@ export interface MarketDashboardContentProps {
   onCreateAlert?: () => void;
   dataQuality?: number;
   latencyMs?: number;
+  lastUpdated?: string;
+  timeframes?: ChartTimeframe[];
 }
 
 export default function MarketDashboardContent({
@@ -70,6 +72,8 @@ export default function MarketDashboardContent({
   onCreateAlert,
   dataQuality,
   latencyMs,
+  lastUpdated,
+  timeframes,
 }: MarketDashboardContentProps) {
   const [localSymbol, setLocalSymbol] = useState(symbol);
   const [localThreshold, setLocalThreshold] = useState(0.5);
@@ -142,6 +146,7 @@ export default function MarketDashboardContent({
         onAlertThresholdChange={handleThresholdChange}
         dataQuality={dataQuality}
         latencyMs={latencyMs}
+        lastUpdated={lastUpdated}
       />
 
       <Box
@@ -161,6 +166,7 @@ export default function MarketDashboardContent({
           symbol={activeSymbol}
           name={indexName ?? activeAsset.name}
           timeframe={timeframe}
+          timeframes={timeframes}
           onTimeframeChange={handleTimeframeChange}
         />
         <ZoneRail

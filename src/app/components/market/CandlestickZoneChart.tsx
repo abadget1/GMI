@@ -91,9 +91,10 @@ export default function CandlestickZoneChart({
   const fadeId = `${svgId}-fade`;
   const gridId = `${svgId}-grid`;
   const shadowId = `${svgId}-shadow`;
-  const source = candles.length ? candles : demoCandles;
+  const source = candles;
 
   const chart = useMemo(() => {
+    if (!source.length) return null;
     const candleHighs = source.map((candle) => candle.high);
     const candleLows = source.map((candle) => candle.low);
     const zoneHighs = zones.map((zone) => zoneBounds(zone).high);
@@ -114,12 +115,14 @@ export default function CandlestickZoneChart({
   }, [currentValue, source, zones]);
 
   const composite = useMemo(
-    () => ({
-      open: source[0].open,
-      high: Math.max(...source.map((candle) => candle.high)),
-      low: Math.min(...source.map((candle) => candle.low)),
-      close: source[source.length - 1].close,
-    }),
+    () => source.length
+      ? ({
+          open: source[0].open,
+          high: Math.max(...source.map((candle) => candle.high)),
+          low: Math.min(...source.map((candle) => candle.low)),
+          close: source[source.length - 1].close,
+        })
+      : null,
     [source],
   );
 
@@ -127,6 +130,95 @@ export default function CandlestickZoneChart({
     if (controlledTimeframe === undefined) setLocalTimeframe(next);
     onTimeframeChange?.(next);
   };
+
+  if (!chart || !composite) {
+    return (
+      <MarketPanel sx={{ height: "100%" }} contentSx={{ height: "100%" }}>
+        <Box sx={{ px: { xs: 2, sm: 2.5 }, py: { xs: 2, sm: 2.4 } }}>
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            alignItems={{ xs: "stretch", sm: "flex-start" }}
+            justifyContent="space-between"
+            spacing={1.5}
+          >
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Box
+                sx={{
+                  width: 32,
+                  height: 32,
+                  display: "grid",
+                  placeItems: "center",
+                  color: marketColors.cyan,
+                  bgcolor: marketColors.cyanSoft,
+                  border: "1px solid rgba(36,185,243,0.22)",
+                  borderRadius: "10px",
+                }}
+              >
+                <AutoGraphRounded sx={{ fontSize: 19 }} />
+              </Box>
+              <Box>
+                <Typography component="h2" sx={{ fontSize: "0.95rem", fontWeight: 850 }}>
+                  {symbol}
+                </Typography>
+                <Typography sx={{ mt: 0.25, color: marketColors.muted, fontSize: "0.62rem" }}>
+                  {name}
+                </Typography>
+              </Box>
+            </Stack>
+            <Stack direction="row" spacing={0.5} sx={{ overflowX: "auto", pb: 0.25 }}>
+              {timeframes.map((item) => {
+                const active = timeframeKey(item) === timeframeKey(activeTimeframe);
+                return (
+                  <Button
+                    key={item}
+                    size="small"
+                    onClick={() => handleTimeframe(item)}
+                    aria-pressed={active}
+                    sx={{
+                      minWidth: 40,
+                      height: 29,
+                      px: 1,
+                      color: active ? marketColors.text : marketColors.muted,
+                      bgcolor: active ? marketColors.cyanSoft : "transparent",
+                      border: `1px solid ${active ? "rgba(36,185,243,0.30)" : marketColors.line}`,
+                      borderRadius: "8px",
+                      fontSize: "0.62rem",
+                      fontWeight: 750,
+                    }}
+                  >
+                    {timeframeLabel(item)}
+                  </Button>
+                );
+              })}
+            </Stack>
+          </Stack>
+          <Box
+            role="status"
+            sx={{
+              minHeight: { xs: 300, sm: 390 },
+              mt: 2,
+              display: "grid",
+              placeItems: "center",
+              px: 2,
+              textAlign: "center",
+              bgcolor: "rgba(3,12,21,0.34)",
+              border: `1px dashed ${marketColors.line}`,
+              borderRadius: "14px",
+            }}
+          >
+            <Box>
+              <Typography sx={{ fontSize: "0.82rem", fontWeight: 800 }}>
+                No {timeframeLabel(activeTimeframe)} bars for {symbol}
+              </Typography>
+              <Typography sx={{ mt: 0.6, color: marketColors.muted, fontSize: "0.62rem" }}>
+                Select an imported timeframe or upload OHLCV data for this interval.
+              </Typography>
+            </Box>
+          </Box>
+        </Box>
+      </MarketPanel>
+    );
+  }
 
   return (
     <MarketPanel
@@ -212,7 +304,7 @@ export default function CandlestickZoneChart({
         >
           <Stack direction="row" spacing={0.65} alignItems="center">
             <StatusDot color={marketColors.demand} />
-            <Typography sx={{ color: marketColors.muted, fontSize: "0.59rem", whiteSpace: "nowrap" }}>Composite candle</Typography>
+            <Typography sx={{ color: marketColors.muted, fontSize: "0.59rem", whiteSpace: "nowrap" }}>Visible range</Typography>
           </Stack>
           {([
             ["O", composite.open],
@@ -447,7 +539,7 @@ export default function CandlestickZoneChart({
           </Stack>
           <Chip
             icon={<BoltRounded sx={{ fontSize: "14px !important" }} />}
-            label="2 active structures"
+            label={`${zones.length} active ${zones.length === 1 ? "structure" : "structures"}`}
             size="small"
             sx={{
               alignSelf: { xs: "flex-start", sm: "auto" },

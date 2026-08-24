@@ -62,6 +62,7 @@ interface HistoricalAssetResponse {
   latest_close?: number;
   provider?: string;
   price_basis?: string;
+  timeframes?: ChartTimeframe[];
   supported_timeframes?: ChartTimeframe[];
 }
 
@@ -84,17 +85,17 @@ function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption
     assetClass,
     dataSource: isAlphaVantage ? "alpha_vantage" : "historical_import",
     priceBasis: asset.price_basis,
-    supportedTimeframes: asset.supported_timeframes,
+    supportedTimeframes: asset.timeframes ?? asset.supported_timeframes,
   };
 }
 
-const navigation: { label: string; icon: ReactNode; badge?: string }[] = [
+const navigation: { label: string; icon: ReactNode }[] = [
   { label: "Overview", icon: <DashboardRounded /> },
   { label: "Global markets", icon: <PublicRounded /> },
   { label: "Index studio", icon: <ShowChartRounded /> },
   { label: "Supply & demand", icon: <Inventory2Rounded /> },
   { label: "Zone analyzer", icon: <AssessmentRounded /> },
-  { label: "Alert center", icon: <AddAlertRounded />, badge: "3" },
+  { label: "Alert center", icon: <AddAlertRounded /> },
 ];
 
 function BrandMark() {
@@ -145,10 +146,12 @@ function SidebarContent({
   activeItem,
   onSelect,
   feedStatus,
+  alertCount,
 }: {
   activeItem: string;
   onSelect: (item: string) => void;
   feedStatus: "connecting" | "connected" | "simulated";
+  alertCount: number;
 }) {
   return (
     <Box
@@ -240,7 +243,7 @@ function SidebarContent({
                 }}
               >
                 {item.label}
-                {item.badge && (
+                {item.label === "Alert center" && alertCount > 0 && (
                   <Box
                     component="span"
                     sx={{
@@ -255,7 +258,7 @@ function SidebarContent({
                       fontSize: "0.52rem",
                     }}
                   >
-                    {item.badge}
+                    {alertCount > 99 ? "99+" : alertCount}
                   </Box>
                 )}
               </Button>

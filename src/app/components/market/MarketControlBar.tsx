@@ -150,7 +150,9 @@ export default function MarketControlBar({
   const selected = assets.find((asset) => asset.symbol === selectedSymbol) ?? assets[0];
   const selectedDetail = selected?.dataSource === "alpha_vantage"
     ? `${selected.assetClass ?? "market"} · ${selected.priceBasis ?? "provider OHLC"}`
-    : `${selected?.componentCount.toLocaleString() ?? "—"} components · synchronized OHLC`;
+    : selected?.dataSource === "historical_import"
+      ? `Imported OHLCV · ${selected.supportedTimeframes?.map((item) => item.toUpperCase()).join(", ") || "custom interval"}`
+      : `${selected?.componentCount.toLocaleString() ?? "—"} components · synchronized OHLC`;
 
   return (
     <>
