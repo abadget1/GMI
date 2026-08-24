@@ -161,9 +161,9 @@ function createDemoBundle(
     timeframe,
   }));
   const detectedZones: MarketStreamZone[] = detectSupplyDemandZones(candles, {
-      timeframe,
-      minRangeAtrMultiple: 1.15,
-    })
+    timeframe,
+    minRangeAtrMultiple: 1.15,
+  })
     .filter((zone) => zone.quality.freshness !== "invalidated")
     .map((zone) => ({
       id: zone.id,

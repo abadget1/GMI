@@ -17,7 +17,10 @@ class Settings:
     environment: str = "development"
     api_prefix: str = "/api/v1"
     cors_origins: tuple[str, ...] = field(
-        default_factory=lambda: ("http://localhost:3000",)
+        default_factory=lambda: (
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        )
     )
     redis_url: str | None = None
     simulation_interval_seconds: float = 1.0
@@ -42,7 +45,10 @@ class Settings:
             environment=os.getenv("GMI_ENVIRONMENT", "development"),
             api_prefix=os.getenv("GMI_API_PREFIX", "/api/v1"),
             cors_origins=_csv(
-                os.getenv("GMI_CORS_ORIGINS", "http://localhost:3000")
+                os.getenv(
+                    "GMI_CORS_ORIGINS",
+                    "http://localhost:3000,http://127.0.0.1:3000",
+                )
             ),
             redis_url=redis_url,
             simulation_interval_seconds=float(

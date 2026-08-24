@@ -85,7 +85,6 @@ export function adaptPressureForView(
 
 export function adaptAlertsForView(
   alerts: readonly MarketStreamAlert[],
-  thresholdPercent: number,
 ): MarketAlert[] {
   return alerts.map((alert) => ({
     id: alert.id,
@@ -93,7 +92,7 @@ export function adaptAlertsForView(
     zoneType: alert.side,
     condition:
       alert.mode === "cross" ? "crossed" : alert.mode === "inside" ? "inside" : "approaching",
-    thresholdPercent,
+    thresholdPercent: alert.thresholdPercent,
     currentDistancePercent: alert.distancePercent,
     triggeredAt: relativeTime(alert.triggeredAt),
   }));

@@ -12,7 +12,12 @@ import {
   adaptMarketSnapshot,
   adaptZoneResponse,
   buildMarketRestUrls,
+  filterMarketZones,
+  marketBucketAdvanced,
+  marketBucketStart,
+  marketReconnectDelayMs,
   mergeCurrentPriceIntoCandles,
+  mergeMarketQuoteIntoCandles,
   mergeMarketAlerts,
   normalizeMarketSymbol,
   normalizeMarketTimeframe,
@@ -309,6 +314,33 @@ test("unwraps a full WS snapshot and selects symbol/timeframe data", () => {
         },
       ],
       zones: { GMI: [] },
+      zones_by_timeframe: {
+        "1d": {
+          GMI: [
+            {
+              id: "zone-1",
+              symbol: "GMI",
+              timeframe: "1d",
+              side: "supply",
+              lower: 1100,
+              upper: 1110,
+              proximal: 1100,
+              distal: 1110,
+              base_timestamp: "2026-08-18T00:00:00Z",
+              impulse_start: "2026-08-19T00:00:00Z",
+              impulse_end: "2026-08-20T00:00:00Z",
+              impulse_candles: 2,
+              quality_score: 84,
+              virgin: true,
+              touch_count: 0,
+              trend_aligned: true,
+              fair_value_gap: true,
+              break_of_structure: true,
+              rationale: "daily supply departure",
+            },
+          ],
+        },
+      },
       alerts: [
         {
           id: "event-1",
@@ -320,6 +352,7 @@ test("unwraps a full WS snapshot and selects symbol/timeframe data", () => {
           side: "supply",
           price: 1092.79,
           distance_pct: 0.2,
+          threshold_pct: 0.75,
           triggered_at: "2026-08-21T20:00:00Z",
           message: "GMI approach",
         },
@@ -332,7 +365,10 @@ test("unwraps a full WS snapshot and selects symbol/timeframe data", () => {
   assert.equal(selected.currentValue, 1092.79);
   assert.equal(selected.liveCandle?.timeframe, "1d");
   assert.equal(selected.pressure[0].state, "demand");
+  assert.equal(selected.zonesAreAuthoritative, true);
+  assert.equal(selected.zones[0].timeframe, "1d");
   assert.equal(selected.alerts[0].mode, "approach");
+  assert.equal(selected.alerts[0].thresholdPercent, 0.75);
 });
 
 test("merges transient alert frames by id and retains the newest 20 events", () => {
@@ -378,4 +414,90 @@ test("applies constituent quote ticks to the current REST candle", () => {
   assert.equal(updated[0].low, 6468);
   assert.equal(updated[0].close, 6481);
   assert.equal(candles[0].close, 6474);
+});
+
+test("rolls constituent quotes into canonical buckets with coherent OHLC", () => {
+  const start = Date.parse("2026-08-21T20:00:00Z");
+  const candles = [
+    {
+      symbol: "SPX",
+      timeframe: "15m",
+      time: start,
+      open: 6470,
+      high: 6478,
+      low: 6468,
+      close: 6474,
+      volume: 100,
+    },
+  ];
+  const sameBucket = mergeMarketQuoteIntoCandles(candles, {
+    symbol: "SPX",
+    timeframe: "15m",
+    price: 6481,
+    generatedAt: Date.parse("2026-08-21T20:14:59Z"),
+  });
+  const nextBucket = mergeMarketQuoteIntoCandles(sameBucket, {
+    symbol: "SPX",
+    timeframe: "15m",
+    price: 6472,
+    generatedAt: Date.parse("2026-08-21T20:15:01Z"),
+  });
+  const nextBucketLow = mergeMarketQuoteIntoCandles(nextBucket, {
+    symbol: "SPX",
+    timeframe: "15m",
+    price: 6469,
+    generatedAt: Date.parse("2026-08-21T20:16:00Z"),
+  });
+
+  assert.equal(sameBucket[0].open, 6470);
+  assert.equal(sameBucket[0].high, 6481);
+  assert.equal(sameBucket[0].low, 6468);
+  assert.equal(nextBucketLow.length, 2);
+  assert.equal(nextBucketLow[1].time, Date.parse("2026-08-21T20:15:00Z"));
+  assert.deepEqual(
+    (({ open, high, low, close, volume }) => ({ open, high, low, close, volume }))(
+      nextBucketLow[1],
+    ),
+    { open: 6472, high: 6472, low: 6469, close: 6469, volume: 0 },
+  );
+});
+
+test("detects bucket advancement and caps reconnect backoff", () => {
+  const before = Date.parse("2026-08-21T23:59:59Z");
+  const after = Date.parse("2026-08-22T00:00:01Z");
+  assert.equal(marketBucketStart(before, "1D"), Date.parse("2026-08-21T00:00:00Z"));
+  assert.equal(marketBucketAdvanced(before, after, "1D"), true);
+  assert.deepEqual(
+    [0, 1, 2, 3, 4, 8].map((attempt) => marketReconnectDelayMs(attempt)),
+    [750, 1500, 3000, 6000, 12000, 15000],
+  );
+});
+
+test("applies identical quality and freshness policy to streamed zones", () => {
+  const makeZone = (id, qualityScore, freshness) => ({
+    id,
+    symbol: "GMI",
+    timeframe: "15m",
+    side: "demand",
+    lower: 100,
+    upper: 101,
+    proximal: 101,
+    distal: 100,
+    baseTimestamp: 1,
+    impulseStart: 2,
+    impulseEnd: 3,
+    impulseCandles: 2,
+    qualityScore,
+    freshness,
+    testCount: freshness === "tested" ? 1 : 0,
+    trendAligned: true,
+    fairValueGap: true,
+    breakOfStructure: true,
+    rationale: id,
+  });
+  const filtered = filterMarketZones(
+    [makeZone("low", 59, "virgin"), makeZone("tested", 90, "tested"), makeZone("best", 88, "virgin")],
+    { minZoneQuality: 60, includeTestedZones: false },
+  );
+  assert.deepEqual(filtered.map(({ id }) => id), ["best"]);
 });

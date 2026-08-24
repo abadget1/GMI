@@ -359,12 +359,12 @@ export default function Dashboard() {
   const visibleAlerts = useMemo(() => {
     const demoFeedAlerts = feed.source === "demo" ? demoAlerts : [];
     const combined = [
-      ...adaptAlertsForView(feed.alerts, alertThreshold),
+      ...adaptAlertsForView(feed.alerts),
       ...alerts,
       ...demoFeedAlerts,
     ];
     return Array.from(new Map(combined.map((alert) => [alert.id, alert])).values()).slice(0, 8);
-  }, [alertThreshold, alerts, feed.alerts, feed.source]);
+  }, [alerts, feed.alerts, feed.source]);
 
   useEffect(() => {
     const updateClock = () => {

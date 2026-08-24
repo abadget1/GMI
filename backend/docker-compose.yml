@@ -5,7 +5,7 @@ services:
       - "8000:8000"
     environment:
       GMI_REDIS_URL: redis://redis:6379/0
-      GMI_CORS_ORIGINS: http://localhost:3000
+      GMI_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
     depends_on:
       redis:
         condition: service_healthy
