@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test:market": "node --experimental-strip-types --test src/lib/market/market.test.mjs"
+    "test:market": "node --experimental-strip-types --test src/lib/market/*.test.mjs"
   },
   "dependencies": {
     "@emotion/cache": "^11.14.0",

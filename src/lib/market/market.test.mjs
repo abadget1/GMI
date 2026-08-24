@@ -230,7 +230,7 @@ test("adapts REST candle and zone payloads with exact structural timestamps", ()
     {
       candles: [
         {
-          symbol: "SPX",
+          symbol: "IXIC",
           timeframe: "1d",
           timestamp: "2026-08-21T00:00:00Z",
           open: 6400,
@@ -249,7 +249,7 @@ test("adapts REST candle and zone payloads with exact structural timestamps", ()
       zones: [
         {
           id: "zone-1",
-          symbol: "SPX",
+          symbol: "IXIC",
           timeframe: "1d",
           side: "demand",
           lower: 6200,
@@ -275,6 +275,8 @@ test("adapts REST candle and zone payloads with exact structural timestamps", ()
   );
 
   assert.equal(candles[0].time, Date.parse("2026-08-21T00:00:00Z"));
+  assert.equal(candles[0].symbol, "SPX");
+  assert.equal(zones[0].symbol, "SPX");
   assert.equal(zones[0].baseTimestamp, Date.parse("2026-08-18T00:00:00Z"));
   assert.equal(zones[0].impulseStart, Date.parse("2026-08-19T00:00:00Z"));
   assert.equal(zones[0].impulseEnd, Date.parse("2026-08-20T00:00:00Z"));

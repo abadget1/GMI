@@ -43,6 +43,9 @@ export interface ActivityRegion {
 
 export interface Candle {
   time: string;
+  /** The API series this bar belongs to. Used to prevent chart cross-talk. */
+  symbol?: string;
+  timeframe?: ChartTimeframe;
   /** Epoch milliseconds used to align server-side structural coordinates. */
   timestamp?: number;
   open: number;
@@ -54,6 +57,9 @@ export interface Candle {
 
 export interface PriceZone {
   id: string;
+  /** The API series this zone belongs to. Used to prevent chart cross-talk. */
+  symbol?: string;
+  timeframe?: ChartTimeframe;
   type: "supply" | "demand";
   proximal: number;
   distal: number;
@@ -76,7 +82,11 @@ export type HeatmapGroup =
   | "Energy"
   | "Agriculture"
   | "Industrial metals"
-  | "Semiconductors";
+  | "Semiconductors"
+  | "Momentum"
+  | "Structure"
+  | "Flow"
+  | "Risk";
 
 export interface HeatmapMetric {
   id: string;

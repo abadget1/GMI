@@ -14,14 +14,6 @@ export interface SupplyDemandHeatmapProps {
   onMetricSelect?: (metric: HeatmapMetric) => void;
 }
 
-const groups: Array<HeatmapGroup | "All"> = [
-  "All",
-  "Energy",
-  "Agriculture",
-  "Industrial metals",
-  "Semiconductors",
-];
-
 function signalColor(pressure: number) {
   if (pressure >= 0) {
     const alpha = 0.12 + Math.min(pressure, 100) * 0.0045;
@@ -46,9 +38,14 @@ export default function SupplyDemandHeatmap({
   onMetricSelect,
 }: SupplyDemandHeatmapProps) {
   const [activeGroup, setActiveGroup] = useState<HeatmapGroup | "All">(initialGroup);
+  const groups = useMemo<Array<HeatmapGroup | "All">>(
+    () => ["All", ...Array.from(new Set(metrics.map((metric) => metric.group)))],
+    [metrics],
+  );
+  const visibleGroup = groups.includes(activeGroup) ? activeGroup : "All";
   const visibleMetrics = useMemo(
-    () => activeGroup === "All" ? metrics : metrics.filter((metric) => metric.group === activeGroup),
-    [activeGroup, metrics],
+    () => visibleGroup === "All" ? metrics : metrics.filter((metric) => metric.group === visibleGroup),
+    [metrics, visibleGroup],
   );
   const netPressure = metrics.length
     ? Math.round(metrics.reduce((total, metric) => total + metric.pressure, 0) / metrics.length)
@@ -86,7 +83,7 @@ export default function SupplyDemandHeatmap({
       >
         <FilterAltRounded sx={{ mr: 0.3, color: marketColors.muted, fontSize: 16 }} />
         {groups.map((group) => {
-          const active = group === activeGroup;
+          const active = group === visibleGroup;
           return (
             <Button
               key={group}
@@ -119,7 +116,7 @@ export default function SupplyDemandHeatmap({
           display: "grid",
           gridTemplateColumns: {
             xs: "repeat(2, minmax(0, 1fr))",
-            sm: activeGroup === "All" ? "repeat(3, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))",
+            sm: visibleGroup === "All" ? "repeat(3, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))",
           },
           gap: 0.85,
         }}
@@ -138,7 +135,7 @@ export default function SupplyDemandHeatmap({
                 onClick={() => onMetricSelect?.(metric)}
                 sx={{
                   position: "relative",
-                  minHeight: activeGroup === "All" ? 86 : 112,
+                  minHeight: visibleGroup === "All" ? 86 : 112,
                   p: 1.3,
                   color: marketColors.text,
                   textAlign: "left",

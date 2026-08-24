@@ -3,7 +3,9 @@
 import { useId, useMemo, useState } from "react";
 import AutoGraphRounded from "@mui/icons-material/AutoGraphRounded";
 import BoltRounded from "@mui/icons-material/BoltRounded";
-import { Box, Button, Chip, Stack, Typography } from "@mui/material";
+import CloseRounded from "@mui/icons-material/CloseRounded";
+import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
+import { Box, Button, Chip, Dialog, DialogContent, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import { demoCandles, demoZones } from "./demoData";
 import { formatMarketValue, marketColors, MarketPanel, StatusDot } from "./MarketPanel";
 import type { Candle, PriceZone } from "./types";
@@ -20,6 +22,9 @@ export interface CandlestickZoneChartProps {
   initialTimeframe?: string;
   timeframes?: string[];
   onTimeframeChange?: (timeframe: string) => void;
+  /** Disable the independent expanded view for a chart rendered in a dialog. */
+  enableExpand?: boolean;
+  onExpand?: () => void;
 }
 
 const CHART_WIDTH = 900;
@@ -72,7 +77,7 @@ function timeframeLabel(value: string) {
   return timeframeKey(value) === "1d" ? "1D" : value;
 }
 
-export default function CandlestickZoneChart({
+function CandlestickChartPanel({
   candles = demoCandles,
   zones = demoZones,
   symbol = "GMI",
@@ -84,6 +89,8 @@ export default function CandlestickZoneChart({
   initialTimeframe = "15m",
   timeframes = ["15m", "30m", "1h", "4h", "1d"],
   onTimeframeChange,
+  enableExpand = true,
+  onExpand,
 }: CandlestickZoneChartProps) {
   const [localTimeframe, setLocalTimeframe] = useState(initialTimeframe);
   const activeTimeframe = controlledTimeframe ?? localTimeframe;
@@ -91,14 +98,21 @@ export default function CandlestickZoneChart({
   const fadeId = `${svgId}-fade`;
   const gridId = `${svgId}-grid`;
   const shadowId = `${svgId}-shadow`;
-  const source = candles;
+  const source = useMemo(
+    () => candles.filter((candle) => !candle.symbol || candle.symbol.toUpperCase() === symbol.toUpperCase()),
+    [candles, symbol],
+  );
+  const visibleZones = useMemo(
+    () => zones.filter((zone) => !zone.symbol || zone.symbol.toUpperCase() === symbol.toUpperCase()),
+    [symbol, zones],
+  );
 
   const chart = useMemo(() => {
     if (!source.length) return null;
     const candleHighs = source.map((candle) => candle.high);
     const candleLows = source.map((candle) => candle.low);
-    const zoneHighs = zones.map((zone) => zoneBounds(zone).high);
-    const zoneLows = zones.map((zone) => zoneBounds(zone).low);
+    const zoneHighs = visibleZones.map((zone) => zoneBounds(zone).high);
+    const zoneLows = visibleZones.map((zone) => zoneBounds(zone).low);
     const rawMin = Math.min(...candleLows, ...zoneLows, currentValue);
     const rawMax = Math.max(...candleHighs, ...zoneHighs, currentValue);
     const pad = Math.max((rawMax - rawMin) * 0.07, 1);
@@ -112,7 +126,7 @@ export default function CandlestickZoneChart({
     const x = (index: number) => PLOT.left + step * index + step / 2;
     const ticks = Array.from({ length: 6 }, (_, index) => max - ((max - min) * index) / 5);
     return { min, max, plotWidth, plotHeight, step, candleWidth, y, x, ticks };
-  }, [currentValue, source, zones]);
+  }, [currentValue, source, visibleZones]);
 
   const composite = useMemo(
     () => source.length
@@ -190,6 +204,18 @@ export default function CandlestickZoneChart({
                   </Button>
                 );
               })}
+              {enableExpand && onExpand && (
+                <Tooltip title={`Open ${symbol} chart`}>
+                  <IconButton
+                    size="small"
+                    onClick={onExpand}
+                    aria-label={`Open ${symbol} candlestick chart`}
+                    sx={{ width: 29, height: 29, color: marketColors.cyan, border: `1px solid ${marketColors.line}`, borderRadius: "8px" }}
+                  >
+                    <OpenInFullRounded sx={{ fontSize: 15 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Stack>
           </Stack>
           <Box
@@ -293,6 +319,18 @@ export default function CandlestickZoneChart({
                 </Button>
               );
             })}
+            {enableExpand && onExpand && (
+              <Tooltip title={`Open ${symbol} chart`}>
+                <IconButton
+                  size="small"
+                  onClick={onExpand}
+                  aria-label={`Open ${symbol} candlestick chart`}
+                  sx={{ width: 29, height: 29, color: marketColors.cyan, border: `1px solid ${marketColors.line}`, borderRadius: "8px" }}
+                >
+                  <OpenInFullRounded sx={{ fontSize: 15 }} />
+                </IconButton>
+              </Tooltip>
+            )}
           </Stack>
         </Stack>
 
@@ -364,7 +402,7 @@ export default function CandlestickZoneChart({
             </g>
           ))}
 
-          {zones.map((zone, index) => {
+          {visibleZones.map((zone, index) => {
             const bounds = zoneBounds(zone);
             const isSupply = zone.type === "supply";
             const color = isSupply ? marketColors.supply : marketColors.cyan;
@@ -539,7 +577,7 @@ export default function CandlestickZoneChart({
           </Stack>
           <Chip
             icon={<BoltRounded sx={{ fontSize: "14px !important" }} />}
-            label={`${zones.length} active ${zones.length === 1 ? "structure" : "structures"}`}
+            label={`${visibleZones.length} active ${visibleZones.length === 1 ? "structure" : "structures"}`}
             size="small"
             sx={{
               alignSelf: { xs: "flex-start", sm: "auto" },
@@ -554,5 +592,56 @@ export default function CandlestickZoneChart({
         </Stack>
       </Box>
     </MarketPanel>
+  );
+}
+
+export default function CandlestickZoneChart(props: CandlestickZoneChartProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [localTimeframe, setLocalTimeframe] = useState(
+    props.initialTimeframe ?? props.timeframe ?? "15m",
+  );
+  const activeTimeframe = props.timeframe ?? localTimeframe;
+  const handleTimeframeChange = (next: string) => {
+    if (props.timeframe === undefined) setLocalTimeframe(next);
+    props.onTimeframeChange?.(next);
+  };
+  const panelProps = {
+    ...props,
+    timeframe: activeTimeframe,
+    initialTimeframe: activeTimeframe,
+    onTimeframeChange: handleTimeframeChange,
+  };
+  const canExpand = props.enableExpand !== false;
+
+  return (
+    <>
+      <CandlestickChartPanel
+        {...panelProps}
+        enableExpand={canExpand}
+        onExpand={() => setExpanded(true)}
+      />
+      {canExpand && (
+        <Dialog
+          open={expanded}
+          onClose={() => setExpanded(false)}
+          fullWidth
+          maxWidth="xl"
+          PaperProps={{ sx: { bgcolor: marketColors.ink, backgroundImage: "none", border: `1px solid ${marketColors.line}` } }}
+        >
+          <DialogContent sx={{ p: { xs: 0.5, sm: 1.5 } }}>
+            <Stack direction="row" justifyContent="flex-end" sx={{ px: 0.5, pt: 0.25 }}>
+              <IconButton
+                onClick={() => setExpanded(false)}
+                aria-label={`Close ${props.symbol ?? "market"} chart`}
+                sx={{ color: marketColors.muted }}
+              >
+                <CloseRounded sx={{ fontSize: 19 }} />
+              </IconButton>
+            </Stack>
+            <CandlestickChartPanel {...panelProps} enableExpand={false} />
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
   );
 }

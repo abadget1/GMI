@@ -47,6 +47,7 @@ export interface MarketDashboardContentProps {
   latencyMs?: number;
   lastUpdated?: string;
   timeframes?: ChartTimeframe[];
+  marketStatus?: "live" | "open" | "closed" | "historical";
 }
 
 export default function MarketDashboardContent({
@@ -74,6 +75,7 @@ export default function MarketDashboardContent({
   latencyMs,
   lastUpdated,
   timeframes,
+  marketStatus,
 }: MarketDashboardContentProps) {
   const [localSymbol, setLocalSymbol] = useState(symbol);
   const [localThreshold, setLocalThreshold] = useState(0.5);
@@ -83,7 +85,11 @@ export default function MarketDashboardContent({
   const liveValue = currentValue ?? activeAsset.value;
 
   const scaledMarketData = useMemo(() => {
-    if (candles && zones) return { candles, zones };
+    // A supplied series is authoritative, even when one related API request
+    // is empty or unavailable. Never pair API candles with demo zones.
+    if (candles !== undefined || zones !== undefined) {
+      return { candles: candles ?? [], zones: zones ?? [] };
+    }
     // A live tick must never rewrite historical candles. Rebase the fixture
     // once for the selected asset, then update only the in-progress last bar.
     const scale = activeAsset.value / demoIndexAssets[0].value;
@@ -136,7 +142,7 @@ export default function MarketDashboardContent({
 
   return (
     <Box component="section" aria-label="Global Market Index dashboard" sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <TickerTape items={tickers} />
+      <TickerTape items={tickers} marketStatus={marketStatus} asOf={lastUpdated} />
 
       <MarketControlBar
         assets={assetOptions}
@@ -158,6 +164,7 @@ export default function MarketDashboardContent({
         }}
       >
         <CandlestickZoneChart
+          key={`${activeSymbol}:${timeframe ?? "15m"}`}
           candles={scaledMarketData.candles}
           zones={scaledMarketData.zones}
           currentValue={liveValue}

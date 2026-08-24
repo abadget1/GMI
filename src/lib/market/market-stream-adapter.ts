@@ -8,7 +8,7 @@ export type MarketTimeframeInput =
   | "4H"
   | "1D";
 
-export type MarketFeedSource = "websocket" | "rest" | "demo";
+export type MarketFeedSource = "websocket" | "rest" | "demo" | "upload";
 
 export interface MarketStreamCandle extends OhlcvBar {
   symbol: string;
@@ -503,6 +503,9 @@ export function adaptCandleResponse(
   return payload.candles
     .map((value) => adaptCandle(value, symbol, timeframe))
     .filter((value): value is MarketStreamCandle => value !== undefined)
+    // The endpoint path/query is authoritative. Prevent a malformed row-level
+    // symbol from leaking another asset into the selected chart.
+    .map((candle) => ({ ...candle, symbol }))
     .sort((left, right) => left.time - right.time);
 }
 
@@ -516,7 +519,8 @@ export function adaptZoneResponse(
   if (!isRecord(payload) || !Array.isArray(payload.zones)) return [];
   return payload.zones
     .map((value) => adaptZone(value, symbol, timeframe))
-    .filter((value): value is MarketStreamZone => value !== undefined);
+    .filter((value): value is MarketStreamZone => value !== undefined)
+    .map((zone) => ({ ...zone, symbol }));
 }
 
 /** Accepts either a raw snapshot or the `{type,data}` WebSocket envelope. */

@@ -43,6 +43,8 @@ function heatmapGroup(group: string): HeatmapGroup {
 export function adaptCandlesForView(candles: readonly MarketStreamCandle[]): Candle[] {
   return candles.map((candle) => ({
     time: marketTime(candle.time, candle.timeframe === "1d"),
+    symbol: candle.symbol,
+    timeframe: candle.timeframe,
     timestamp: candle.time,
     open: candle.open,
     high: candle.high,
@@ -55,6 +57,8 @@ export function adaptCandlesForView(candles: readonly MarketStreamCandle[]): Can
 export function adaptZonesForView(zones: readonly MarketStreamZone[]): PriceZone[] {
   return zones.map((zone) => ({
     id: zone.id,
+    symbol: zone.symbol,
+    timeframe: zone.timeframe,
     type: zone.side,
     proximal: zone.proximal,
     distal: zone.distal,

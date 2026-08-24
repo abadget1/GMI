@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import AddAlertRounded from "@mui/icons-material/AddAlertRounded";
 import AssessmentRounded from "@mui/icons-material/AssessmentRounded";
 import DashboardRounded from "@mui/icons-material/DashboardRounded";
@@ -37,6 +37,7 @@ import {
 } from "@mui/material";
 import {
   MarketDashboardContent,
+  MarketControlBar,
   adaptAlertsForView,
   adaptCandlesForView,
   adaptPressureForView,
@@ -50,10 +51,41 @@ import {
   type IndexAssetOption,
   type MarketAlert,
 } from "@/app/components/market";
-import { resolveMarketEndpoints } from "@/lib/market/market-stream-adapter";
+import {
+  calculateDataQuality,
+  deriveActivityRegions,
+  deriveHistoricalHeatmap,
+  deriveMarketAnalytics,
+  deriveWatchlistAssets,
+} from "@/app/components/market/analytics";
+import MarketWorkspaceView, {
+  type MarketWorkspaceViewName,
+} from "@/app/components/market/MarketWorkspaceViews";
+import {
+  deriveClientHistoricalZones,
+  parseClientHistoricalImport,
+} from "@/lib/market/client-historical-import";
+import {
+  resolveMarketEndpoints,
+  type MarketStreamCandle,
+  type MarketStreamZone,
+} from "@/lib/market/market-stream-adapter";
 import { useMarketStream } from "@/lib/market/useMarketStream";
 
 const SIDEBAR_WIDTH = 232;
+
+interface LocalHistoricalDataset {
+  asset: IndexAssetOption;
+  timeframe: ChartTimeframe;
+  candles: MarketStreamCandle[];
+  zones: MarketStreamZone[];
+  importedAt: Date;
+  rowsReceived: number;
+}
+
+function localDatasetKey(symbol: string, timeframe: ChartTimeframe): string {
+  return `${symbol.trim().toUpperCase()}::${timeframe}`;
+}
 
 interface HistoricalAssetResponse {
   symbol: string;
@@ -97,6 +129,39 @@ const navigation: { label: string; icon: ReactNode }[] = [
   { label: "Zone analyzer", icon: <AssessmentRounded /> },
   { label: "Alert center", icon: <AddAlertRounded /> },
 ];
+
+const pageMetadata: Record<string, { eyebrow: string; title: string; description: string }> = {
+  Overview: {
+    eyebrow: "Global pulse",
+    title: "Market intelligence overview",
+    description: "Composite indices, physical flows, structural zones, and alert proximity in one view.",
+  },
+  "Global markets": {
+    eyebrow: "Cross-market monitor",
+    title: "Global markets",
+    description: "Compare session activity, synchronized performance, volume, and regime signals.",
+  },
+  "Index studio": {
+    eyebrow: "Quant workspace",
+    title: "Index studio",
+    description: "Inspect the selected series, normalized performance, return shape, and range statistics.",
+  },
+  "Supply & demand": {
+    eyebrow: "Flow intelligence",
+    title: "Supply & demand",
+    description: "Read momentum, volume, structural pressure, and active price zones from one dataset.",
+  },
+  "Zone analyzer": {
+    eyebrow: "Structure engine",
+    title: "Zone analyzer",
+    description: "Validate zone quality, freshness, structural evidence, and distance to price.",
+  },
+  "Alert center": {
+    eyebrow: "Signal operations",
+    title: "Alert center",
+    description: "Monitor armed rules and triggered proximity events for the selected market.",
+  },
+};
 
 function BrandMark() {
   return (
@@ -147,11 +212,19 @@ function SidebarContent({
   onSelect,
   feedStatus,
   alertCount,
+  timeframe,
+  isImported,
+  onOpenHelp,
+  onOpenSettings,
 }: {
   activeItem: string;
   onSelect: (item: string) => void;
   feedStatus: "connecting" | "connected" | "simulated";
   alertCount: number;
+  timeframe: ChartTimeframe;
+  isImported: boolean;
+  onOpenHelp: () => void;
+  onOpenSettings: () => void;
 }) {
   return (
     <Box
@@ -283,26 +356,29 @@ function SidebarContent({
               }
             />
             <Typography sx={{ fontSize: "0.59rem", fontWeight: 800 }}>
-              {feedStatus === "connected"
-                ? "API stream connected"
+              {isImported
+                ? "Uploaded dataset ready"
+                : feedStatus === "connected"
+                  ? "API stream connected"
                 : feedStatus === "connecting"
                   ? "Connecting to stream"
                   : "Deterministic demo feed"}
             </Typography>
           </Stack>
           <Typography sx={{ mt: 0.75, color: marketColors.muted, fontSize: "0.52rem", lineHeight: 1.55 }}>
-            Normalized OHLC · 15m base bars
+            {timeframe.toUpperCase()} · synchronized OHLCV
           </Typography>
         </Box>
         <Stack direction="row" spacing={0.55} sx={{ mt: 1 }}>
           <Button
             fullWidth
             startIcon={<HelpOutlineRounded />}
+            onClick={onOpenHelp}
             sx={{ color: marketColors.muted, fontSize: "0.55rem", textTransform: "none", "& svg": { fontSize: 15 } }}
           >
             Help
           </Button>
-          <IconButton aria-label="Settings" sx={{ color: marketColors.muted }}>
+          <IconButton aria-label="Settings" onClick={onOpenSettings} sx={{ color: marketColors.muted }}>
             <SettingsRounded sx={{ fontSize: 17 }} />
           </IconButton>
         </Stack>
@@ -311,7 +387,28 @@ function SidebarContent({
   );
 }
 
-function MethodologyFooter() {
+function MethodologyFooter({
+  isImported,
+  timeframe,
+  barCount,
+}: {
+  isImported: boolean;
+  timeframe: ChartTimeframe;
+  barCount: number;
+}) {
+  const methodologyLabels = isImported
+    ? [
+        `${barCount.toLocaleString()} validated bars`,
+        `${timeframe.toUpperCase()} source interval`,
+        "Last-row duplicate resolution",
+        "No look-ahead zones",
+      ]
+    : [
+        "Rebased to 1,000",
+        "Frozen candle weights",
+        "Aligned OHLC envelope",
+        "No look-ahead zones",
+      ];
   return (
     <Box
       component="footer"
@@ -332,12 +429,7 @@ function MethodologyFooter() {
           Methodology v1.0
         </Typography>
       </Stack>
-      {[
-        "Rebased to 1,000",
-        "Frozen candle weights",
-        "Aligned OHLC envelope",
-        "No look-ahead zones",
-      ].map((label) => (
+      {methodologyLabels.map((label) => (
         <Chip
           key={label}
           label={label}
@@ -369,6 +461,7 @@ export default function Dashboard() {
   const [alertMode, setAlertMode] = useState<"approach" | "inside" | "cross">("approach");
   const [alerts, setAlerts] = useState<MarketAlert[]>([]);
   const [uploadedAssets, setUploadedAssets] = useState<IndexAssetOption[]>([]);
+  const [localDatasets, setLocalDatasets] = useState<Record<string, LocalHistoricalDataset>>({});
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadSymbol, setUploadSymbol] = useState("");
@@ -377,6 +470,10 @@ export default function Dashboard() {
   const [isUploading, setIsUploading] = useState(false);
   const [notice, setNotice] = useState<{ message: string; severity: "success" | "error" } | null>(null);
   const [displayTime, setDisplayTime] = useState("Synchronizing clock");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [helpDialogOpen, setHelpDialogOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const assetOptions = useMemo(() => {
     const merged = new Map(demoIndexAssets.map((asset) => [asset.symbol, asset]));
@@ -387,28 +484,78 @@ export default function Dashboard() {
   const selectedAsset =
     assetOptions.find((asset) => asset.symbol === selectedSymbol) ??
     assetOptions[0];
-  const isAlphaAsset = selectedAsset.dataSource === "alpha_vantage";
+  const isRestOnlyAsset = selectedAsset.dataSource === "alpha_vantage" || selectedAsset.dataSource === "historical_import";
   const handleResolvedTimeframe = useCallback((timeframe: ChartTimeframe) => {
     setSelectedTimeframe((current) => current === timeframe ? current : timeframe);
   }, []);
-  const feed = useMarketStream({
+  const streamedFeed = useMarketStream({
     symbol: selectedSymbol,
     timeframe: selectedTimeframe,
     fallbackValue: selectedAsset.value,
     fallbackChangePercent: selectedAsset.changePercent,
     candleLimit: 120,
     minZoneQuality: 45,
-    wsUrl: isAlphaAsset ? null : undefined,
-    preferRestCandles: isAlphaAsset,
+    wsUrl: isRestOnlyAsset ? null : undefined,
+    preferRestCandles: isRestOnlyAsset,
     restRefreshIntervalMs: 60_000,
     onTimeframeResolved: handleResolvedTimeframe,
   });
 
+  const localDataset = localDatasets[localDatasetKey(selectedSymbol, selectedTimeframe)];
+  const feed = useMemo(() => {
+    if (!localDataset) {
+      // The stream hook resets on symbol/timeframe changes. During that
+      // hand-off, hide the previous series instead of briefly labeling it as
+      // the newly selected asset.
+      if (streamedFeed.symbol === selectedSymbol && streamedFeed.timeframe === selectedTimeframe) {
+        return streamedFeed;
+      }
+      return {
+        ...streamedFeed,
+        symbol: selectedSymbol,
+        timeframe: selectedTimeframe,
+        currentValue: selectedAsset.value,
+        changePercent: selectedAsset.changePercent,
+        updatedAt: null,
+        isLoading: true,
+        error: null,
+        candles: [],
+        zones: [],
+        pressure: [],
+        alerts: [],
+      };
+    }
+    const latest = localDataset.candles.at(-1);
+    const previous = localDataset.candles.at(-2);
+    const currentValue = latest?.close ?? selectedAsset.value;
+    const changePercent = previous?.close
+      ? ((currentValue / previous.close) - 1) * 100
+      : 0;
+    return {
+      ...streamedFeed,
+      symbol: selectedSymbol,
+      timeframe: localDataset.timeframe,
+      currentValue,
+      changePercent,
+      status: "connected" as const,
+      source: "upload" as const,
+      latencyMs: 0,
+      sequence: localDataset.candles.length,
+      updatedAt: localDataset.importedAt,
+      isLoading: false,
+      error: null,
+      candles: localDataset.candles.slice(-120),
+      zones: localDataset.zones,
+      pressure: [],
+      alerts: [],
+    };
+  }, [localDataset, selectedAsset.changePercent, selectedAsset.value, selectedSymbol, selectedTimeframe, streamedFeed]);
+
   const marketEndpoints = useMemo(
     () =>
       resolveMarketEndpoints({
-        apiUrl: process.env.NEXT_PUBLIC_MARKET_API_URL,
-        wsUrl: process.env.NEXT_PUBLIC_MARKET_WS_URL,
+        apiUrl: process.env.NEXT_PUBLIC_MARKET_API_URL ?? process.env.NEXT_PUBLIC_GMI_API_URL,
+        wsUrl: process.env.NEXT_PUBLIC_MARKET_WS_URL ?? process.env.NEXT_PUBLIC_GMI_WS_URL,
       }),
     [],
   );
@@ -431,7 +578,11 @@ export default function Dashboard() {
             ...(Array.isArray(payload.live_assets) ? payload.live_assets : []),
             ...(Array.isArray(payload.imported_assets) ? payload.imported_assets : []),
           ];
-          setUploadedAssets(assets.map(historicalAssetOption));
+          setUploadedAssets((current) => {
+            const merged = new Map(current.map((asset) => [asset.symbol, asset]));
+            assets.map(historicalAssetOption).forEach((asset) => merged.set(asset.symbol, asset));
+            return Array.from(merged.values());
+          });
         }
       })
       .catch(() => {
@@ -442,16 +593,45 @@ export default function Dashboard() {
 
   const viewCandles = useMemo(() => adaptCandlesForView(feed.candles), [feed.candles]);
   const viewZones = useMemo(() => adaptZonesForView(feed.zones), [feed.zones]);
-  const viewHeatmap = useMemo(() => adaptPressureForView(feed.pressure), [feed.pressure]);
-  const visibleAlerts = useMemo(() => {
+  const globalHeatmap = useMemo(() => adaptPressureForView(feed.pressure), [feed.pressure]);
+  const analytics = useMemo(
+    () => deriveMarketAnalytics(viewCandles, feed.timeframe),
+    [feed.timeframe, viewCandles],
+  );
+  const historicalHeatmap = useMemo(
+    () => deriveHistoricalHeatmap(viewCandles, viewZones, selectedSymbol),
+    [selectedSymbol, viewCandles, viewZones],
+  );
+  const synchronizedHeatmap = selectedAsset.dataSource === "historical_import" || feed.source === "upload"
+    ? historicalHeatmap
+    : globalHeatmap.length > 0
+      ? globalHeatmap
+      : historicalHeatmap;
+  const synchronizedRegions = useMemo(() => deriveActivityRegions(viewCandles), [viewCandles]);
+  const derivedWatchlist = useMemo(
+    () => deriveWatchlistAssets(assetOptions, selectedSymbol, viewCandles, viewZones),
+    [assetOptions, selectedSymbol, viewCandles, viewZones],
+  );
+  const synchronizedWatchlist = selectedAsset.dataSource === "historical_import" || feed.source === "upload"
+    ? derivedWatchlist.filter((asset) => asset.symbol === selectedSymbol)
+    : derivedWatchlist;
+  const dataQuality = useMemo(() => calculateDataQuality(viewCandles), [viewCandles]);
+  const quoteChange = viewCandles.length > 1
+    ? viewCandles[viewCandles.length - 1].close - viewCandles[viewCandles.length - 2].close
+    : 0;
+  const lastUpdatedLabel = feed.updatedAt
+    ? `Updated ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(feed.updatedAt)}`
+    : "Awaiting first update";
+  const allAlerts = useMemo(() => {
     const demoFeedAlerts = feed.source === "demo" ? demoAlerts : [];
     const combined = [
       ...adaptAlertsForView(feed.alerts),
       ...alerts,
       ...demoFeedAlerts,
     ];
-    return Array.from(new Map(combined.map((alert) => [alert.id, alert])).values()).slice(0, 8);
+    return Array.from(new Map(combined.map((alert) => [alert.id, alert])).values());
   }, [alerts, feed.alerts, feed.source]);
+  const visibleAlerts = allAlerts.slice(0, 8);
 
   useEffect(() => {
     const updateClock = () => {
@@ -469,8 +649,30 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
+
   const liveTickers = useMemo(
     () => {
+      if (selectedAsset.dataSource === "historical_import" || feed.source === "upload") {
+        return [{
+          symbol: selectedSymbol,
+          name: selectedAsset.name,
+          value: feed.currentValue,
+          changePercent: feed.changePercent,
+          change: quoteChange,
+          precision: feed.currentValue < 10 ? 4 : 2,
+          session: `${feed.timeframe.toUpperCase()} uploaded series`,
+        }];
+      }
       const updated = demoTickers.map((ticker) =>
         ticker.symbol === selectedSymbol
           ? {
@@ -494,8 +696,38 @@ export default function Dashboard() {
         ...updated,
       ];
     },
-    [feed.changePercent, feed.currentValue, selectedAsset.name, selectedSymbol],
+    [feed.changePercent, feed.currentValue, feed.source, feed.timeframe, quoteChange, selectedAsset.dataSource, selectedAsset.name, selectedSymbol],
   );
+
+  const availableTimeframes = selectedAsset.supportedTimeframes?.length
+    ? selectedAsset.supportedTimeframes
+    : (["15m", "30m", "1h", "4h", "1d"] as ChartTimeframe[]);
+
+  const chooseAsset = useCallback((symbol: string) => {
+    const nextAsset = assetOptions.find((asset) => asset.symbol === symbol);
+    setSelectedSymbol(symbol);
+    if (
+      nextAsset?.supportedTimeframes?.length &&
+      !nextAsset.supportedTimeframes.includes(selectedTimeframe)
+    ) {
+      setSelectedTimeframe(nextAsset.supportedTimeframes.at(-1) ?? "1d");
+    }
+  }, [assetOptions, selectedTimeframe]);
+
+  const submitSearch = () => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return;
+    const match = assetOptions.find((asset) =>
+      asset.symbol.toLowerCase() === query || asset.name.toLowerCase().includes(query),
+    );
+    if (!match) {
+      setNotice({ message: `No market matched “${searchQuery.trim()}”`, severity: "error" });
+      return;
+    }
+    chooseAsset(match.symbol);
+    setActiveNavigation("Index studio");
+    setSearchQuery("");
+  };
 
   const chooseNavigation = (item: string) => {
     setActiveNavigation(item);
@@ -505,20 +737,26 @@ export default function Dashboard() {
   const createAlert = async () => {
     const apiBase = marketEndpoints.apiBaseUrl;
     try {
+      let synchronizedToApi = false;
       if (apiBase) {
-        const response = await fetch(`${apiBase}/alerts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            symbol: selectedSymbol,
-            zone_side: alertSide,
-            mode: alertMode,
-            timeframe: feed.timeframe,
-            threshold_pct: alertThreshold,
-            cooldown_seconds: 300,
-          }),
-        });
-        if (!response.ok) throw new Error(`API returned ${response.status}`);
+        try {
+          const response = await fetch(`${apiBase}/alerts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              symbol: selectedSymbol,
+              zone_side: alertSide,
+              mode: alertMode,
+              timeframe: feed.timeframe,
+              threshold_pct: alertThreshold,
+              cooldown_seconds: 300,
+            }),
+          });
+          if (!response.ok) throw new Error(`API returned ${response.status}`);
+          synchronizedToApi = true;
+        } catch (error) {
+          if (feed.source !== "upload") throw error;
+        }
       }
 
       const condition: MarketAlert["condition"] =
@@ -538,7 +776,7 @@ export default function Dashboard() {
       ]);
       setAlertDialogOpen(false);
       setNotice({
-        message: `${selectedSymbol} ${feed.timeframe.toUpperCase()} ${alertMode} alert armed`,
+        message: `${selectedSymbol} ${feed.timeframe.toUpperCase()} ${alertMode} alert armed${apiBase && !synchronizedToApi ? " in this browser session" : ""}`,
         severity: "success",
       });
     } catch (error) {
@@ -552,12 +790,12 @@ export default function Dashboard() {
   const importHistoricalData = async () => {
     const apiBase = marketEndpoints.apiBaseUrl;
     const symbol = uploadSymbol.trim().toUpperCase();
-    if (!apiBase) {
-      setNotice({ message: "Connect the market API before importing data", severity: "error" });
-      return;
-    }
     if (!uploadFile) {
       setNotice({ message: "Choose a CSV or JSON OHLCV file first", severity: "error" });
+      return;
+    }
+    if (uploadFile.size > 10 * 1024 * 1024) {
+      setNotice({ message: "Historical imports are limited to 10 MB", severity: "error" });
       return;
     }
     if (!/^[A-Z0-9._:/-]{1,32}$/.test(symbol)) {
@@ -569,25 +807,88 @@ export default function Dashboard() {
     try {
       const extension = uploadFile.name.split(".").pop()?.toLowerCase();
       const sourceFormat = extension === "json" ? "json" : "csv";
-      const params = new URLSearchParams({
+      const fileText = await uploadFile.text();
+      const parsedCandles = parseClientHistoricalImport({
+        text: fileText,
+        format: sourceFormat,
         symbol,
         timeframe: uploadTimeframe,
-        mode: "replace",
-        format: sourceFormat,
       });
-      if (uploadName.trim()) params.set("name", uploadName.trim());
-      const response = await fetch(`${apiBase}/historical/import?${params.toString()}`, {
-        method: "POST",
-        headers: { "Content-Type": sourceFormat === "json" ? "application/json" : "text/csv" },
-        body: await uploadFile.text(),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(
-          typeof payload.detail === "string" ? payload.detail : `API returned ${response.status}`,
-        );
+      const retainedCandles = parsedCandles.slice(-500);
+      const localZones = deriveClientHistoricalZones(retainedCandles)
+        .filter((zone) => zone.qualityScore >= 45)
+        .slice(-20);
+      const previousAsset = assetOptions.find((asset) => asset.symbol === symbol);
+      const supportedTimeframes = Array.from(new Set([
+        ...(previousAsset?.supportedTimeframes ?? []),
+        uploadTimeframe,
+      ])).sort((left, right) =>
+        (["15m", "30m", "1h", "4h", "1d"] as ChartTimeframe[]).indexOf(left) -
+        (["15m", "30m", "1h", "4h", "1d"] as ChartTimeframe[]).indexOf(right),
+      );
+      let imported: IndexAssetOption = {
+        symbol,
+        name: uploadName.trim() || previousAsset?.name || symbol,
+        value: retainedCandles.at(-1)?.close ?? 1_000,
+        change: retainedCandles.length > 1
+          ? retainedCandles[retainedCandles.length - 1].close - retainedCandles[retainedCandles.length - 2].close
+          : 0,
+        changePercent: retainedCandles.length > 1
+          ? ((retainedCandles[retainedCandles.length - 1].close / retainedCandles[retainedCandles.length - 2].close) - 1) * 100
+          : 0,
+        method: "Historical import · browser validated",
+        componentCount: 0,
+        assetClass: "custom",
+        dataSource: "historical_import",
+        priceBasis: "Uploaded OHLCV",
+        supportedTimeframes,
+      };
+      let apiSyncMessage = "browser session";
+
+      if (apiBase) {
+        try {
+          const params = new URLSearchParams({
+            symbol,
+            timeframe: uploadTimeframe,
+            mode: "replace",
+            format: sourceFormat,
+          });
+          if (uploadName.trim()) params.set("name", uploadName.trim());
+          const response = await fetch(`${apiBase}/historical/import?${params.toString()}`, {
+            method: "POST",
+            headers: { "Content-Type": sourceFormat === "json" ? "application/json" : "text/csv" },
+            body: fileText,
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(
+              typeof payload.detail === "string" ? payload.detail : `API returned ${response.status}`,
+            );
+          }
+          const apiAsset = historicalAssetOption(payload.asset as HistoricalAssetResponse);
+          imported = {
+            ...imported,
+            ...apiAsset,
+            supportedTimeframes: apiAsset.supportedTimeframes ?? supportedTimeframes,
+          };
+          apiSyncMessage = `API synchronized · ${payload.rows_retained ?? retainedCandles.length} retained`;
+        } catch {
+          apiSyncMessage = "browser session · API sync unavailable";
+        }
       }
-      const imported = historicalAssetOption(payload.asset as HistoricalAssetResponse);
+
+      const importedAt = new Date();
+      setLocalDatasets((current) => ({
+        ...current,
+        [localDatasetKey(symbol, uploadTimeframe)]: {
+          asset: imported,
+          timeframe: uploadTimeframe,
+          candles: retainedCandles,
+          zones: localZones,
+          importedAt,
+          rowsReceived: parsedCandles.length,
+        },
+      }));
       setUploadedAssets((current) => {
         const next = new Map(current.map((asset) => [asset.symbol, asset]));
         next.set(imported.symbol, imported);
@@ -598,7 +899,7 @@ export default function Dashboard() {
       setUploadDialogOpen(false);
       setUploadFile(null);
       setNotice({
-        message: `${imported.symbol}: ${payload.rows_received} rows imported (${payload.rows_retained} retained)`,
+        message: `${imported.symbol}: ${parsedCandles.length.toLocaleString()} bars loaded · ${apiSyncMessage}`,
         severity: "success",
       });
     } catch (error) {
@@ -610,6 +911,8 @@ export default function Dashboard() {
       setIsUploading(false);
     }
   };
+
+  const activePage = pageMetadata[activeNavigation] ?? pageMetadata.Overview;
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: marketColors.ink }}>
@@ -627,6 +930,11 @@ export default function Dashboard() {
           activeItem={activeNavigation}
           onSelect={chooseNavigation}
           feedStatus={feed.status}
+          alertCount={allAlerts.length}
+          timeframe={feed.timeframe}
+          isImported={selectedAsset.dataSource === "historical_import" || feed.source === "upload"}
+          onOpenHelp={() => setHelpDialogOpen(true)}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       </Box>
 
@@ -648,6 +956,11 @@ export default function Dashboard() {
           activeItem={activeNavigation}
           onSelect={chooseNavigation}
           feedStatus={feed.status}
+          alertCount={allAlerts.length}
+          timeframe={feed.timeframe}
+          isImported={selectedAsset.dataSource === "historical_import" || feed.source === "upload"}
+          onOpenHelp={() => setHelpDialogOpen(true)}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       </Drawer>
 
@@ -694,8 +1007,14 @@ export default function Dashboard() {
             <SearchRounded sx={{ mr: 1, color: "#63788f", fontSize: 18 }} />
             <Box
               component="input"
+              ref={searchInputRef}
               aria-label="Search markets"
               placeholder="Search market, sector, or zone"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery((event.target as HTMLInputElement).value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") submitSearch();
+              }}
               sx={{
                 width: "100%",
                 color: marketColors.text,
@@ -722,7 +1041,7 @@ export default function Dashboard() {
               color={feed.status === "connected" ? marketColors.demand : marketColors.warning}
             />
             <Typography sx={{ color: "#a7b6c8", fontSize: "0.56rem", fontWeight: 700 }}>
-              {feed.status === "connected" ? "Live API" : "Demo stream"}
+              {feed.source === "upload" ? "Uploaded data" : feed.status === "connected" ? "Live API" : "Demo stream"}
             </Typography>
           </Stack>
           <Typography
@@ -731,10 +1050,15 @@ export default function Dashboard() {
           >
             {displayTime}
           </Typography>
-          <IconButton aria-label="Notifications" sx={{ color: marketColors.muted }}>
+          <IconButton
+            aria-label="Open alert center"
+            onClick={() => chooseNavigation("Alert center")}
+            sx={{ color: marketColors.muted }}
+          >
             <Badge
               color="error"
               variant="dot"
+              invisible={allAlerts.length === 0}
               overlap="circular"
               sx={{ "& .MuiBadge-badge": { bgcolor: marketColors.warning } }}
             >
@@ -776,10 +1100,10 @@ export default function Dashboard() {
             spacing={1.3}
             sx={{ mb: 2.2, px: 0.4 }}
           >
-            <Box>
+            {activeNavigation === "Overview" && <Box>
               <Stack direction="row" alignItems="center" spacing={0.8} sx={{ mb: 0.75 }}>
                 <Typography sx={{ color: marketColors.cyan, fontSize: "0.52rem", fontWeight: 850, letterSpacing: "0.13em", textTransform: "uppercase" }}>
-                  Global pulse
+                  {activePage.eyebrow}
                 </Typography>
                 <Box sx={{ width: 22, height: 1, bgcolor: "rgba(69,217,255,0.45)" }} />
                 <Typography sx={{ color: marketColors.muted, fontSize: "0.52rem" }}>
@@ -795,16 +1119,16 @@ export default function Dashboard() {
                   letterSpacing: "-0.045em",
                 }}
               >
-                Market intelligence overview
+                {activePage.title}
               </Typography>
               <Typography sx={{ mt: 0.65, color: marketColors.muted, fontSize: { xs: "0.62rem", sm: "0.68rem" } }}>
-                Composite indices, physical flows, structural zones, and alert proximity in one view.
+                {activePage.description}
               </Typography>
-            </Box>
-            <Stack direction="row" alignItems="center" spacing={0.8}>
+            </Box>}
+            <Stack direction="row" alignItems="center" spacing={0.8} sx={{ ml: { sm: activeNavigation === "Overview" ? 0 : "auto" } }}>
               <Chip
                 icon={<StatusDot color={marketColors.demand} />}
-                label={`${feed.latencyMs}ms latency`}
+                label={feed.source === "upload" ? "Local dataset" : `${feed.latencyMs}ms latency`}
                 size="small"
                 sx={{
                   height: 27,
@@ -854,27 +1178,82 @@ export default function Dashboard() {
             </Stack>
           </Stack>
 
-          <MarketDashboardContent
-            tickers={liveTickers}
-            assetOptions={assetOptions}
-            selectedSymbol={selectedSymbol}
-            currentValue={feed.currentValue}
-            change={(feed.currentValue * feed.changePercent) / 100}
-            changePercent={feed.changePercent}
-            alertThreshold={alertThreshold}
-            alerts={visibleAlerts}
-            candles={viewCandles}
-            zones={viewZones}
-            heatmap={viewHeatmap}
+          {activeNavigation === "Overview" ? (
+            <MarketDashboardContent
+              tickers={liveTickers}
+              regions={synchronizedRegions}
+              watchlist={synchronizedWatchlist}
+              assetOptions={assetOptions}
+              selectedSymbol={selectedSymbol}
+              currentValue={feed.currentValue}
+              change={quoteChange}
+              changePercent={feed.changePercent}
+              alertThreshold={alertThreshold}
+              alerts={visibleAlerts}
+              candles={viewCandles}
+              zones={viewZones}
+              heatmap={synchronizedHeatmap}
+              timeframe={feed.timeframe}
+              timeframes={availableTimeframes}
+              marketStatus={selectedAsset.dataSource === "historical_import" || feed.source === "upload" ? "historical" : "live"}
+              onAssetChange={chooseAsset}
+              onAlertThresholdChange={setAlertThreshold}
+              onTimeframeChange={setSelectedTimeframe}
+              onCreateAlert={() => setAlertDialogOpen(true)}
+              dataQuality={dataQuality}
+              latencyMs={feed.latencyMs}
+              lastUpdated={lastUpdatedLabel}
+            />
+          ) : (
+            <Stack spacing={2}>
+              <MarketControlBar
+                assets={assetOptions}
+                selectedSymbol={selectedSymbol}
+                alertThreshold={alertThreshold}
+                onAssetChange={chooseAsset}
+                onAlertThresholdChange={setAlertThreshold}
+                dataQuality={dataQuality}
+                latencyMs={feed.latencyMs}
+                lastUpdated={lastUpdatedLabel}
+              />
+              <MarketWorkspaceView
+                view={activeNavigation as MarketWorkspaceViewName}
+                candles={viewCandles}
+                zones={viewZones}
+                heatmap={synchronizedHeatmap}
+                analytics={analytics.summary.bars ? analytics.summary : null}
+                analyticsPoints={analytics.performance}
+                regions={synchronizedRegions}
+                tickers={liveTickers}
+                alerts={allAlerts}
+                watchlist={synchronizedWatchlist}
+                assetOptions={assetOptions}
+                selectedSymbol={selectedSymbol}
+                selectedAssetName={selectedAsset.name}
+                timeframe={feed.timeframe}
+                availableTimeframes={availableTimeframes}
+                currentValue={feed.currentValue}
+                change={quoteChange}
+                changePercent={feed.changePercent}
+                alertThreshold={alertThreshold}
+                dataQuality={dataQuality}
+                latencyMs={feed.latencyMs}
+                lastUpdated={lastUpdatedLabel}
+                marketStatus={selectedAsset.dataSource === "historical_import" || feed.source === "upload" ? "historical" : "live"}
+                onAssetChange={chooseAsset}
+                onTimeframeChange={setSelectedTimeframe}
+                onAlertThresholdChange={setAlertThreshold}
+                onCreateAlert={() => setAlertDialogOpen(true)}
+                onOpenAlert={() => setAlertDialogOpen(true)}
+                onWatchlistAssetSelect={(asset) => chooseAsset(asset.symbol)}
+              />
+            </Stack>
+          )}
+          <MethodologyFooter
+            isImported={selectedAsset.dataSource === "historical_import" || feed.source === "upload"}
             timeframe={feed.timeframe}
-            onAssetChange={setSelectedSymbol}
-            onAlertThresholdChange={setAlertThreshold}
-            onTimeframeChange={setSelectedTimeframe}
-            onCreateAlert={() => setAlertDialogOpen(true)}
-            dataQuality={99.4}
-            latencyMs={feed.latencyMs}
+            barCount={viewCandles.length}
           />
-          <MethodologyFooter />
         </Box>
       </Box>
 
@@ -1022,6 +1401,97 @@ export default function Dashboard() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Dialog
+        open={helpDialogOpen}
+        onClose={() => setHelpDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{
+          sx: {
+            color: marketColors.text,
+            bgcolor: "#0b1a2a",
+            backgroundImage: "none",
+            border: `1px solid ${marketColors.line}`,
+            borderRadius: "16px",
+          },
+        }}
+      >
+        <DialogTitle sx={{ fontSize: "1rem", fontWeight: 850 }}>Meridian data guide</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2}>
+            {[
+              ["Importing OHLCV", "Choose CSV or JSON with timestamp, open, high, low, and close. Volume is optional. Dates, Unix seconds, and Unix milliseconds are supported."],
+              ["Synchronized views", "Every analytical view uses the selected symbol, timeframe, candles, detected zones, and derived volume/return statistics from the same dataset."],
+              ["Zone quality", "Scores combine departure strength, freshness, trend alignment, break of structure, and fair-value-gap evidence without future candles."],
+              ["Alerts", "Approach, inside-zone, and boundary-crossing rules use the selected symbol and active timeframe."],
+            ].map(([title, body]) => (
+              <Box key={title} sx={{ p: 1.5, bgcolor: "rgba(255,255,255,0.025)", border: `1px solid ${marketColors.line}`, borderRadius: "12px" }}>
+                <Typography sx={{ fontSize: "0.72rem", fontWeight: 850 }}>{title}</Typography>
+                <Typography sx={{ mt: 0.55, color: marketColors.muted, fontSize: "0.64rem", lineHeight: 1.65 }}>{body}</Typography>
+              </Box>
+            ))}
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={() => setHelpDialogOpen(false)} sx={{ color: marketColors.cyan }}>Done</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Drawer
+        anchor="right"
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        slotProps={{
+          paper: {
+            sx: {
+              width: "min(90vw, 380px)",
+              p: 2,
+              color: marketColors.text,
+              bgcolor: "#071321",
+              backgroundImage: "none",
+              borderLeft: `1px solid ${marketColors.line}`,
+            },
+          },
+        }}
+      >
+        <Typography sx={{ fontSize: "1rem", fontWeight: 850 }}>Workspace settings</Typography>
+        <Typography sx={{ mt: 0.4, color: marketColors.muted, fontSize: "0.62rem" }}>
+          Current data provenance and analysis defaults
+        </Typography>
+        <Stack spacing={1.2} sx={{ mt: 2 }}>
+          {[
+            ["Selected market", `${selectedSymbol} · ${selectedAsset.name}`],
+            ["Source", selectedAsset.dataSource === "historical_import" ? "Historical upload" : selectedAsset.dataSource === "alpha_vantage" ? "Alpha Vantage" : "Deterministic simulator"],
+            ["Timeframe", feed.timeframe.toUpperCase()],
+            ["Loaded bars", viewCandles.length.toLocaleString()],
+            ["Detected zones", viewZones.length.toLocaleString()],
+            ["API", marketEndpoints.apiBaseUrl ? "Configured" : "Optional API not configured"],
+          ].map(([label, value]) => (
+            <Stack key={label} direction="row" justifyContent="space-between" spacing={2} sx={{ p: 1.25, bgcolor: "rgba(255,255,255,0.025)", border: `1px solid ${marketColors.line}`, borderRadius: "10px" }}>
+              <Typography sx={{ color: marketColors.muted, fontSize: "0.61rem" }}>{label}</Typography>
+              <Typography sx={{ maxWidth: 205, textAlign: "right", fontSize: "0.61rem", fontWeight: 800 }}>{value}</Typography>
+            </Stack>
+          ))}
+        </Stack>
+        <Stack spacing={1} sx={{ mt: 2 }}>
+          <Button
+            variant="contained"
+            startIcon={<FileUploadRounded />}
+            onClick={() => { setSettingsOpen(false); setUploadDialogOpen(true); }}
+            sx={{ color: "#03131e", bgcolor: marketColors.cyan, fontWeight: 850, textTransform: "none" }}
+          >
+            Import dataset
+          </Button>
+          <Button
+            startIcon={<AddAlertRounded />}
+            onClick={() => { setSettingsOpen(false); setAlertDialogOpen(true); }}
+            sx={{ color: marketColors.cyan, border: `1px solid ${marketColors.line}`, textTransform: "none" }}
+          >
+            Configure alert
+          </Button>
+        </Stack>
+      </Drawer>
 
       <Snackbar open={Boolean(notice)} autoHideDuration={4200} onClose={() => setNotice(null)}>
         <MuiAlert severity={notice?.severity ?? "success"} variant="filled" onClose={() => setNotice(null)}>

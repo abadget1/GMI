@@ -100,7 +100,7 @@ export default function WorldActivityMap({
 
           {regions.map((region) => {
             const color = statusColor[region.status];
-            const active = region.id === selectedId;
+            const active = region.id === selected?.id;
             return (
               <g
                 key={region.id}

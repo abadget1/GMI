@@ -9,7 +9,7 @@ import type { MarketTicker } from "./types";
 
 export interface TickerTapeProps {
   items?: MarketTicker[];
-  marketStatus?: "live" | "open" | "closed";
+  marketStatus?: "live" | "open" | "closed" | "historical";
   asOf?: string;
 }
 
@@ -19,7 +19,9 @@ export default function TickerTape({
   asOf = "Streaming · normalized",
 }: TickerTapeProps) {
   const statusLabel =
-    marketStatus === "live"
+    marketStatus === "historical"
+      ? "Historical series"
+      : marketStatus === "live"
       ? "Market pulse"
       : `Markets ${marketStatus === "open" ? "open" : "closed"}`;
   const statusAccent =
@@ -65,7 +67,7 @@ export default function TickerTape({
           </Typography>
         </Box>
         <Chip
-          label={marketStatus === "closed" ? "PAUSED" : "LIVE"}
+          label={marketStatus === "historical" ? "SYNCED" : marketStatus === "closed" ? "PAUSED" : "LIVE"}
           size="small"
           sx={{
             ml: "auto !important",

@@ -5,6 +5,7 @@ A real-time cross-asset market dashboard and supply/demand zone engine. The proj
 ## What is included
 
 - A responsive global macro dashboard inspired by professional trading workstations
+- Six synchronized workspaces: Overview, Global Markets, Index Studio, Supply & Demand, Zone Analyzer, and Alert Center
 - S&P 500 and Nasdaq Composite views across 15-minute, 30-minute, 1-hour, 4-hour, and daily intervals
 - Normalized equal-weight and market-cap-weight index calculations
 - Supply/demand zone detection using base candles, 2–3 candle impulses, trend, break-of-structure, fair-value-gap, and retest filters
@@ -54,9 +55,11 @@ The free Alpha Vantage service is generally limited to 25 API calls per day and 
 
 ## Import historical data
 
-Use **Import** in the dashboard to upload a UTF-8 `.csv` or `.json` OHLCV file, then choose it from the asset selector. The import supports any symbol, including symbols such as `AAPL`, `BTC-USD`, or `EUR/USD`; it is kept separate from the configured GMI component universe.
+Use **Import** in the dashboard to upload a UTF-8 `.csv` or `.json` OHLCV file, then choose it from the asset selector. The import supports any symbol, including symbols such as `AAPL`, `BTC-USD`, or `EUR/USD`; it is kept separate from the configured GMI component universe. The browser validates and loads the dataset immediately, so all six workspaces update even when the optional API is offline. When the API is configured, the same payload is synchronized to the backend as well.
 
 Required fields are `timestamp`, `open`, `high`, `low`, and `close`; `volume` is optional. Timestamps may be ISO-8601, Unix seconds, or Unix milliseconds. Header aliases such as `time`, `date`, `o`, `h`, `l`, `c`, and `vol` are accepted. Duplicate timestamps use the last row, which makes vendor corrections safe to re-import.
+
+Imported browser-session data is intentionally device-local and lasts until the page is closed. The reference API keeps imports in memory; production deployments should persist raw files and normalized bars in durable storage.
 
 For automation, post raw UTF-8 CSV or JSON to:
 
