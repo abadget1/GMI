@@ -32,6 +32,11 @@ class Settings:
     # Free-tier safe default: daily endpoints only. Intraday is opt-in because
     # it is both quota-expensive and commonly entitlement-limited.
     alpha_vantage_intraday_enabled: bool = False
+    twelve_data_api_key: str | None = None
+    twelve_data_base_url: str = "https://api.twelvedata.com"
+    twelve_data_cache_ttl_seconds: float = 900.0
+    twelve_data_timeout_seconds: float = 12.0
+    twelve_data_min_request_interval_seconds: float = 0.25
     simulation_interval_seconds: float = 1.0
     history_limit: int = 500
     random_seed: int = 17
@@ -66,6 +71,7 @@ class Settings:
     def from_env(cls) -> "Settings":
         redis_url = os.getenv("GMI_REDIS_URL") or None
         alpha_vantage_api_key = os.getenv("GMI_ALPHA_VANTAGE_API_KEY") or None
+        twelve_data_api_key = os.getenv("GMI_TWELVE_DATA_API_KEY") or None
         return cls(
             app_name=os.getenv("GMI_APP_NAME", "Global Market Index API"),
             environment=os.getenv("GMI_ENVIRONMENT", "development"),
@@ -98,6 +104,19 @@ class Settings:
                 "GMI_ALPHA_VANTAGE_INTRADAY_ENABLED", "false"
             ).strip().casefold()
             not in {"0", "false", "no", "off"},
+            twelve_data_api_key=twelve_data_api_key,
+            twelve_data_base_url=os.getenv(
+                "GMI_TWELVE_DATA_BASE_URL", "https://api.twelvedata.com"
+            ),
+            twelve_data_cache_ttl_seconds=float(
+                os.getenv("GMI_TWELVE_DATA_CACHE_TTL_SECONDS", "900")
+            ),
+            twelve_data_timeout_seconds=float(
+                os.getenv("GMI_TWELVE_DATA_TIMEOUT_SECONDS", "12")
+            ),
+            twelve_data_min_request_interval_seconds=float(
+                os.getenv("GMI_TWELVE_DATA_MIN_REQUEST_INTERVAL_SECONDS", "0.25")
+            ),
             simulation_interval_seconds=float(
                 os.getenv("GMI_SIMULATION_INTERVAL_SECONDS", "1.0")
             ),

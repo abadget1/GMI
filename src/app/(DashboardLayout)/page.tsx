@@ -125,7 +125,7 @@ function alphaBoardMetric(item: AlphaBoardItem): HeatmapMetric | null {
 
 function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption {
   const latestClose = asset.latest_close;
-  const isAlphaVantage = asset.provider === "alpha_vantage";
+  const isLiveProvider = asset.provider === "alpha_vantage" || asset.provider === "twelve_data";
   const assetClass = ["index", "forex", "commodity", "crypto", "custom"].includes(asset.asset_class ?? "")
     ? asset.asset_class as IndexAssetOption["assetClass"]
     : "custom";
@@ -135,12 +135,12 @@ function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption
     value: typeof latestClose === "number" && Number.isFinite(latestClose) && latestClose > 0 ? latestClose : 0,
     change: 0,
     changePercent: 0,
-    method: isAlphaVantage
-      ? `Alpha Vantage · ${assetClass}`
+    method: isLiveProvider
+      ? `${asset.provider === "twelve_data" ? "Twelve Data" : "Alpha Vantage"} · ${assetClass}`
       : `Historical import${asset.asset_class ? ` · ${asset.asset_class}` : ""}`,
     componentCount: 0,
     assetClass,
-    dataSource: isAlphaVantage ? "alpha_vantage" : "historical_import",
+    dataSource: isLiveProvider ? "alpha_vantage" : "historical_import",
     priceBasis: asset.price_basis,
     supportedTimeframes: asset.timeframes ?? asset.supported_timeframes,
   };

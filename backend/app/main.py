@@ -36,6 +36,12 @@ from .historical import HistoricalDataError, parse_historical_data
 from .ingestion import COMPONENTS, MarketEngine
 from .schemas import AlertEvaluationRequest, AlertRuleCreate
 from .store import InMemoryMarketStore, create_store
+from .twelve_data import (
+    TWELVE_SYMBOLS,
+    TwelveDataClient,
+    TwelveDataError,
+    TwelveDataRateLimitError,
+)
 from .zones import completed_candles, detect_zones
 
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +65,44 @@ def _known_symbols(request: Request) -> set[str]:
     return VALID_SYMBOLS | set(ALPHA_ASSET_BY_SYMBOL) | set(imported)
 
 
+DEMO_ASSET_PRICES = {
+    "SPX": 6500.0,
+    "NDX": 22000.0,
+    "DJI": 44000.0,
+    "EURUSD": 1.08,
+    "GBPUSD": 1.27,
+    "USDJPY": 149.0,
+    "BTCUSD": 65_000.0,
+    "ETHUSD": 3_500.0,
+    "SOLUSD": 160.0,
+    "WTI": 74.0,
+    "BRENT": 78.0,
+    "NATURAL_GAS": 2.2,
+    "COPPER": 4.1,
+    "WHEAT": 590.0,
+}
+
+
+def demo_board(asset_class: str | None, limit: int) -> list[dict]:
+    values: list[dict] = []
+    for asset in ALPHA_ASSETS:
+        if asset_class and asset.asset_class.value != asset_class:
+            continue
+        price = DEMO_ASSET_PRICES.get(asset.symbol, 100.0)
+        change = ((sum(ord(char) for char in asset.symbol) % 9) - 4) / 10
+        values.append(
+            {
+                "symbol": asset.symbol,
+                "name": asset.name,
+                "asset_class": asset.asset_class,
+                "price": price,
+                "change_percent": change,
+                "provider": "demo",
+            }
+        )
+    return values[: max(1, min(8, int(limit)))]
+
+
 async def _market_history(
     request: Request,
     symbol: str,
@@ -69,6 +113,16 @@ async def _market_history(
 
     imported = getattr(request.app.state, "historical_assets", {})
     alpha: AlphaVantageClient = request.app.state.alpha_vantage
+    twelve: TwelveDataClient = request.app.state.twelve_data
+    if symbol not in imported and (symbol == "GMI" or symbol in TWELVE_SYMBOLS) and twelve.configured:
+        try:
+            result = await twelve.get_candles(symbol, timeframe, limit)
+            return list(result.candles)[-limit:], result.effective_timeframe, result.metadata()
+        except TwelveDataRateLimitError as exc:
+            logger.warning("Twelve Data rate limit; trying fallback: %s", exc)
+        except TwelveDataError as exc:
+            logger.warning("Twelve Data unavailable for %s; trying fallback: %s", symbol, exc)
+
     alpha_symbol = symbol == "GMI" or symbol in ALPHA_ASSET_BY_SYMBOL
     if symbol not in imported and alpha_symbol and alpha.configured:
         try:
@@ -114,10 +168,12 @@ def create_app(
         alerts = AlertEngine()
         engine = MarketEngine(store, settings, alerts)
         alpha = alpha_vantage or AlphaVantageClient(settings)
+        twelve = TwelveDataClient(settings)
         app.state.store = store
         app.state.alert_engine = alerts
         app.state.market_engine = engine
         app.state.alpha_vantage = alpha
+        app.state.twelve_data = twelve
         app.state.historical_assets = {}
         await engine.initialize(periods=min(120, max(20, settings.history_limit - 1)))
         ingestion_task = asyncio.create_task(engine.run(), name="market-ingestion")
@@ -130,6 +186,7 @@ def create_app(
             except asyncio.CancelledError:
                 pass
             await alpha.close()
+            await twelve.close()
             await store.close()
 
     app = FastAPI(
@@ -170,6 +227,7 @@ def create_app(
 
     @app.get(f"{settings.api_prefix}/assets", tags=["markets"])
     async def assets(request: Request) -> dict:
+        provider_name = "twelve_data" if request.app.state.twelve_data.configured else "alpha_vantage"
         alpha_catalog = [
             {
                 "symbol": "GMI",
@@ -183,6 +241,10 @@ def create_app(
             },
             *[asset.public_contract() for asset in ALPHA_ASSETS],
         ]
+        for item in alpha_catalog:
+            item["provider"] = provider_name
+            if item["symbol"] in TWELVE_SYMBOLS:
+                item["provider_symbol"] = TWELVE_SYMBOLS[item["symbol"]]
         return {
             "index": {
                 "symbol": "GMI",
@@ -192,13 +254,13 @@ def create_app(
             },
             "components": primitive(COMPONENTS),
             "provider": {
-                "name": "alpha_vantage",
-                "configured": request.app.state.alpha_vantage.configured,
+                "name": provider_name,
+                "configured": request.app.state.twelve_data.configured or request.app.state.alpha_vantage.configured,
                 "intraday_enabled": settings.alpha_vantage_intraday_enabled,
                 "daily_fallback": True,
             },
             "asset_catalog": alpha_catalog,
-            "live_assets": alpha_catalog if request.app.state.alpha_vantage.configured else [],
+            "live_assets": alpha_catalog if (request.app.state.twelve_data.configured or request.app.state.alpha_vantage.configured) else [],
             "imported_assets": primitive(
                 sorted(
                     getattr(request.app.state, "historical_assets", {}).values(),
@@ -342,13 +404,28 @@ def create_app(
         asset_class: str | None = Query(default=None),
         limit: int = Query(default=8, ge=1, le=8),
     ) -> dict:
-        """Return cached Alpha Vantage daily quotes for boards and heatmaps."""
+        """Return cached provider quotes for boards and heatmaps."""
         alpha: AlphaVantageClient = request.app.state.alpha_vantage
+        twelve: TwelveDataClient = request.app.state.twelve_data
+        if twelve.configured:
+            try:
+                items = await twelve.get_board(asset_class, limit)
+            except TwelveDataRateLimitError as exc:
+                raise HTTPException(status_code=429, detail=str(exc)) from exc
+            except TwelveDataError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return {
+                "count": len(items),
+                "items": primitive(items),
+                "provider": "twelve_data",
+            }
         if not alpha.configured:
-            raise HTTPException(
-                status_code=503,
-                detail="Alpha Vantage is not configured; set GMI_ALPHA_VANTAGE_API_KEY.",
-            )
+            items = demo_board(asset_class, limit)
+            return {
+                "count": len(items),
+                "items": primitive(items),
+                "provider": "demo",
+            }
         normalized_class: AlphaAssetClass | None = None
         if asset_class:
             try:
