@@ -9,4 +9,4 @@ export type {
   MarketFeedState,
   MarketFeedStatus,
   UseMarketStreamOptions,
-} from "./useMarketStream";
+} from "./useMarketStream"; 
