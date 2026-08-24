@@ -79,6 +79,8 @@ class SyntheticMarketFeed:
         periods: int,
         now: datetime,
     ) -> list[Candle]:
+        if periods < 1:
+            raise ValueError("history periods must be positive")
         volatility = 0.0025 * math.sqrt(timeframe.seconds / Timeframe.M15.seconds)
         start = floor_timestamp(now, timeframe) - timedelta(
             seconds=timeframe.seconds * periods
@@ -105,7 +107,25 @@ class SyntheticMarketFeed:
                 )
             )
             price = closing
-        return candles
+
+        # Every timeframe is simulated independently, so its unscaled random
+        # walk would otherwise finish at a different nominal price. Preserve
+        # the generated return path while putting every series on the same
+        # terminal anchor used by the live feed.
+        scale = component.reference_price / candles[-1].close
+        return [
+            Candle(
+                symbol=candle.symbol,
+                timeframe=candle.timeframe,
+                timestamp=candle.timestamp,
+                open=candle.open * scale,
+                high=candle.high * scale,
+                low=candle.low * scale,
+                close=candle.close * scale,
+                volume=candle.volume,
+            )
+            for candle in candles
+        ]
 
 
 class MarketEngine:

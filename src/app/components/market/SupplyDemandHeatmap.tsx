@@ -53,6 +53,11 @@ export default function SupplyDemandHeatmap({
   const netPressure = metrics.length
     ? Math.round(metrics.reduce((total, metric) => total + metric.pressure, 0) / metrics.length)
     : 0;
+  const netLabel = netPressure > 0
+    ? `+${netPressure} net demand`
+    : netPressure < 0
+      ? `${Math.abs(netPressure)} net supply`
+      : "0 balanced";
 
   return (
     <MarketPanel
@@ -60,7 +65,7 @@ export default function SupplyDemandHeatmap({
       eyebrow="Physical + market flows"
       action={
         <Chip
-          label={`${netPressure >= 0 ? "+" : ""}${netPressure} net demand`}
+          label={netLabel}
           size="small"
           sx={{
             height: 27,
@@ -124,7 +129,7 @@ export default function SupplyDemandHeatmap({
           return (
             <Tooltip
               key={metric.id}
-              title={`${metric.name}: ${metric.pressure > 0 ? "demand" : "supply"} pressure ${Math.abs(metric.pressure)}/100`}
+              title={`${metric.name}: ${metric.pressure > 0 ? "demand" : metric.pressure < 0 ? "supply" : "balanced"} pressure ${Math.abs(metric.pressure)}/100`}
               arrow
             >
               <Box
@@ -193,4 +198,3 @@ export default function SupplyDemandHeatmap({
     </MarketPanel>
   );
 }
-

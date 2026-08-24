@@ -688,24 +688,3 @@ export function mergeMarketQuoteIntoCandles(
     },
   ];
 }
-
-/** Applies a quote tick to the latest selected constituent candle. */
-export function mergeCurrentPriceIntoCandles(
-  candles: readonly MarketStreamCandle[],
-  currentPrice: number | undefined,
-): readonly MarketStreamCandle[] {
-  if (typeof currentPrice !== "number" || !Number.isFinite(currentPrice) || currentPrice <= 0 || candles.length === 0) {
-    return candles;
-  }
-  const last = candles[candles.length - 1];
-  if (last.close === currentPrice) return candles;
-  return [
-    ...candles.slice(0, -1),
-    {
-      ...last,
-      high: Math.max(last.high, currentPrice),
-      low: Math.min(last.low, currentPrice),
-      close: currentPrice,
-    },
-  ];
-}

@@ -16,7 +16,6 @@ import {
   marketBucketAdvanced,
   marketBucketStart,
   marketReconnectDelayMs,
-  mergeCurrentPriceIntoCandles,
   mergeMarketQuoteIntoCandles,
   mergeMarketAlerts,
   normalizeMarketSymbol,
@@ -392,28 +391,6 @@ test("merges transient alert frames by id and retains the newest 20 events", () 
   assert.equal(merged[0].message, "updated");
   assert.equal(merged[1].id, "new");
   assert.equal(new Set(merged.map(({ id }) => id)).size, 20);
-});
-
-test("applies constituent quote ticks to the current REST candle", () => {
-  const candles = [
-    {
-      symbol: "SPX",
-      timeframe: "15m",
-      time: Date.parse("2026-08-21T20:00:00Z"),
-      open: 6470,
-      high: 6478,
-      low: 6468,
-      close: 6474,
-      volume: 100,
-    },
-  ];
-  const updated = mergeCurrentPriceIntoCandles(candles, 6481);
-
-  assert.equal(updated[0].open, 6470);
-  assert.equal(updated[0].high, 6481);
-  assert.equal(updated[0].low, 6468);
-  assert.equal(updated[0].close, 6481);
-  assert.equal(candles[0].close, 6474);
 });
 
 test("rolls constituent quotes into canonical buckets with coherent OHLC", () => {
