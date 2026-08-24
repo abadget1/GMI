@@ -92,8 +92,8 @@ interface HistoricalAssetResponse {
   latest_close?: number;
   provider?: string;
   price_basis?: string;
-  timeframes?: ChartTimeframe[];
   supported_timeframes?: ChartTimeframe[];
+  timeframes?: ChartTimeframe[];
 }
 
 interface AlphaBoardItem {
@@ -590,7 +590,9 @@ export default function Dashboard() {
     () =>
       resolveMarketEndpoints({
         apiUrl: process.env.NEXT_PUBLIC_MARKET_API_URL ?? process.env.NEXT_PUBLIC_GMI_API_URL,
-        wsUrl: process.env.NEXT_PUBLIC_MARKET_WS_URL ?? process.env.NEXT_PUBLIC_GMI_WS_URL,
+        wsUrl:
+          (process.env.NEXT_PUBLIC_MARKET_WS_URL ?? process.env.NEXT_PUBLIC_GMI_WS_URL)?.trim() ||
+          null,
       }),
     [],
   );
@@ -603,6 +605,7 @@ export default function Dashboard() {
       .then(async (response) => {
         if (!response.ok) throw new Error(`API returned ${response.status}`);
         return response.json() as Promise<{
+          asset_catalog?: HistoricalAssetResponse[];
           live_assets?: HistoricalAssetResponse[];
           imported_assets?: HistoricalAssetResponse[];
         }>;
@@ -610,6 +613,7 @@ export default function Dashboard() {
       .then((payload) => {
         if (!controller.signal.aborted) {
           const assets = [
+            ...(Array.isArray(payload.asset_catalog) ? payload.asset_catalog : []),
             ...(Array.isArray(payload.live_assets) ? payload.live_assets : []),
             ...(Array.isArray(payload.imported_assets) ? payload.imported_assets : []),
           ];

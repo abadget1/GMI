@@ -88,7 +88,14 @@ function publicEnvironmentEndpoints(options: UseMarketStreamOptions): MarketEndp
     process.env.NEXT_PUBLIC_MARKET_WS_URL ?? process.env.NEXT_PUBLIC_GMI_WS_URL;
   return {
     apiUrl: options.apiBaseUrl === undefined ? environmentApi : options.apiBaseUrl,
-    wsUrl: options.wsUrl === undefined ? environmentWs : options.wsUrl,
+    // An empty public WS URL explicitly selects REST-only mode. Vercel's
+    // Python functions do not provide a persistent WebSocket server.
+    wsUrl:
+      options.wsUrl === undefined
+        ? environmentWs?.trim()
+          ? environmentWs
+          : null
+        : options.wsUrl,
   };
 }
 
