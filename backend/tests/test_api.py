@@ -149,6 +149,7 @@ class ApiContractTests(unittest.TestCase):
         live_settings = Settings(
             alpha_vantage_api_key="test-key",
             alpha_vantage_base_url="https://alpha.test/query",
+            alpha_vantage_intraday_enabled=True,
             redis_url=None,
             simulation_interval_seconds=60,
             history_limit=40,
