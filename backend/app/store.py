@@ -47,6 +47,35 @@ class InMemoryMarketStore:
             history = self._candles.get((symbol, timeframe), ())
             return list(history)[-limit:]
 
+    async def replace_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        candles: list[Candle],
+        *,
+        merge: bool = False,
+    ) -> list[Candle]:
+        """Atomically replace or merge a candle history from an import.
+
+        Importing is intentionally separate from `upsert_candle`: historical
+        files commonly contain bars older than the current in-memory tail.
+        Duplicate timestamps use the uploaded value as the vendor correction.
+        """
+
+        if any(candle.symbol != symbol or candle.timeframe != timeframe for candle in candles):
+            raise ValueError("all imported candles must share the target symbol and timeframe")
+        async with self._lock:
+            current = self._candles.get((symbol, timeframe), ())
+            by_timestamp = {candle.timestamp: candle for candle in current} if merge else {}
+            by_timestamp.update({candle.timestamp: candle for candle in candles})
+            ordered = [by_timestamp[timestamp] for timestamp in sorted(by_timestamp)]
+            retained = ordered[-self.history_limit :]
+            self._candles[(symbol, timeframe)] = deque(
+                retained,
+                maxlen=self.history_limit,
+            )
+            return list(retained)
+
     async def publish(self, snapshot: MarketSnapshot) -> None:
         async with self._lock:
             self._snapshot = snapshot
@@ -124,6 +153,32 @@ class RedisMirroredMarketStore(InMemoryMarketStore):
                 await pipeline.execute()
         except Exception:
             await self._fall_back_after_redis_error()
+
+    async def replace_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        candles: list[Candle],
+        *,
+        merge: bool = False,
+    ) -> list[Candle]:
+        retained = await super().replace_candles(symbol, timeframe, candles, merge=merge)
+        if self._redis is None:
+            return retained
+        key = f"gmi:candles:{symbol}:{timeframe.value}"
+        try:
+            payloads = {
+                json.dumps(primitive(candle), separators=(",", ":")): candle.timestamp.timestamp()
+                for candle in retained
+            }
+            async with self._redis.pipeline(transaction=False) as pipeline:
+                pipeline.delete(key)
+                if payloads:
+                    pipeline.zadd(key, payloads)
+                await pipeline.execute()
+        except Exception:
+            await self._fall_back_after_redis_error()
+        return retained
 
     async def publish(self, snapshot: MarketSnapshot) -> None:
         await super().publish(snapshot)

@@ -88,6 +88,54 @@ class ApiContractTests(unittest.TestCase):
                 self.assertIn("GMI", message["data"]["prices"])
                 self.assertIn("4h", message["data"]["zones_by_timeframe"])
 
+    def test_imports_csv_history_for_a_custom_asset_and_serves_it_back(self) -> None:
+        csv_body = """timestamp,open,high,low,close,volume
+2025-01-02T00:00:00Z,100,104,99,103,1200
+2025-01-03T00:00:00Z,103,108,102,107,1500
+2025-01-03T00:00:00Z,103,109,102,108,1700
+"""
+        with TestClient(create_app(self.settings)) as client:
+            imported = client.post(
+                "/api/v1/historical/import",
+                params={
+                    "symbol": "BRK.B",
+                    "name": "Berkshire Hathaway B",
+                    "timeframe": "1d",
+                    "mode": "replace",
+                },
+                content=csv_body,
+                headers={"Content-Type": "text/csv"},
+            )
+            self.assertEqual(imported.status_code, 200)
+            payload = imported.json()
+            self.assertEqual(payload["asset"]["symbol"], "BRK.B")
+            self.assertEqual(payload["rows_received"], 3)
+            self.assertEqual(payload["rows_deduplicated"], 1)
+            self.assertEqual(payload["latest_candle"]["close"], 108)
+
+            assets = client.get("/api/v1/historical/assets")
+            self.assertEqual(assets.status_code, 200)
+            self.assertEqual(assets.json()["assets"][0]["name"], "Berkshire Hathaway B")
+
+            candles = client.get(
+                "/api/v1/index/candles",
+                params={"symbol": "BRK.B", "timeframe": "1d", "limit": 10},
+            )
+            self.assertEqual(candles.status_code, 200)
+            self.assertEqual(candles.json()["count"], 2)
+            self.assertEqual(candles.json()["candles"][-1]["high"], 109)
+
+    def test_rejects_invalid_historical_ohlc(self) -> None:
+        with TestClient(create_app(self.settings)) as client:
+            imported = client.post(
+                "/api/v1/historical/import",
+                params={"symbol": "BAD", "timeframe": "1d"},
+                content="timestamp,open,high,low,close\n2025-01-02,10,9,8,11\n",
+                headers={"Content-Type": "text/csv"},
+            )
+            self.assertEqual(imported.status_code, 422)
+            self.assertIn("OHLC", imported.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

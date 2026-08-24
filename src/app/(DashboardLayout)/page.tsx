@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import AddAlertRounded from "@mui/icons-material/AddAlertRounded";
 import AssessmentRounded from "@mui/icons-material/AssessmentRounded";
 import DashboardRounded from "@mui/icons-material/DashboardRounded";
+import FileUploadRounded from "@mui/icons-material/FileUploadRounded";
 import HelpOutlineRounded from "@mui/icons-material/HelpOutlineRounded";
 import Inventory2Rounded from "@mui/icons-material/Inventory2Rounded";
 import MenuRounded from "@mui/icons-material/MenuRounded";
@@ -31,6 +32,7 @@ import {
   Select,
   Snackbar,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import {
@@ -45,12 +47,33 @@ import {
   marketColors,
   StatusDot,
   type ChartTimeframe,
+  type IndexAssetOption,
   type MarketAlert,
 } from "@/app/components/market";
 import { resolveMarketEndpoints } from "@/lib/market/market-stream-adapter";
 import { useMarketStream } from "@/lib/market/useMarketStream";
 
 const SIDEBAR_WIDTH = 232;
+
+interface HistoricalAssetResponse {
+  symbol: string;
+  name?: string;
+  asset_class?: string;
+  latest_close?: number;
+}
+
+function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption {
+  const latestClose = asset.latest_close;
+  return {
+    symbol: asset.symbol.toUpperCase(),
+    name: asset.name?.trim() || asset.symbol.toUpperCase(),
+    value: typeof latestClose === "number" && Number.isFinite(latestClose) && latestClose > 0 ? latestClose : 1_000,
+    change: 0,
+    changePercent: 0,
+    method: `Historical import${asset.asset_class ? ` · ${asset.asset_class}` : ""}`,
+    componentCount: 0,
+  };
+}
 
 const navigation: { label: string; icon: ReactNode; badge?: string }[] = [
   { label: "Overview", icon: <DashboardRounded /> },
@@ -329,12 +352,25 @@ export default function Dashboard() {
   const [alertSide, setAlertSide] = useState<"supply" | "demand">("demand");
   const [alertMode, setAlertMode] = useState<"approach" | "inside" | "cross">("approach");
   const [alerts, setAlerts] = useState<MarketAlert[]>([]);
+  const [uploadedAssets, setUploadedAssets] = useState<IndexAssetOption[]>([]);
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadSymbol, setUploadSymbol] = useState("");
+  const [uploadName, setUploadName] = useState("");
+  const [uploadTimeframe, setUploadTimeframe] = useState<ChartTimeframe>("1d");
+  const [isUploading, setIsUploading] = useState(false);
   const [notice, setNotice] = useState<{ message: string; severity: "success" | "error" } | null>(null);
   const [displayTime, setDisplayTime] = useState("Synchronizing clock");
 
+  const assetOptions = useMemo(() => {
+    const merged = new Map(demoIndexAssets.map((asset) => [asset.symbol, asset]));
+    uploadedAssets.forEach((asset) => merged.set(asset.symbol, asset));
+    return Array.from(merged.values());
+  }, [uploadedAssets]);
+
   const selectedAsset =
-    demoIndexAssets.find((asset) => asset.symbol === selectedSymbol) ??
-    demoIndexAssets[0];
+    assetOptions.find((asset) => asset.symbol === selectedSymbol) ??
+    assetOptions[0];
   const feed = useMarketStream({
     symbol: selectedSymbol,
     timeframe: selectedTimeframe,
@@ -352,6 +388,26 @@ export default function Dashboard() {
       }),
     [],
   );
+
+  useEffect(() => {
+    const apiBase = marketEndpoints.apiBaseUrl;
+    if (!apiBase) return;
+    const controller = new AbortController();
+    fetch(`${apiBase}/historical/assets`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`API returned ${response.status}`);
+        return response.json() as Promise<{ assets?: HistoricalAssetResponse[] }>;
+      })
+      .then((payload) => {
+        if (!controller.signal.aborted && Array.isArray(payload.assets)) {
+          setUploadedAssets(payload.assets.map(historicalAssetOption));
+        }
+      })
+      .catch(() => {
+        // The dashboard remains fully functional when the optional API is absent.
+      });
+    return () => controller.abort();
+  }, [marketEndpoints.apiBaseUrl]);
 
   const viewCandles = useMemo(() => adaptCandlesForView(feed.candles), [feed.candles]);
   const viewZones = useMemo(() => adaptZonesForView(feed.zones), [feed.zones]);
@@ -446,6 +502,68 @@ export default function Dashboard() {
         message: error instanceof Error ? `Could not create alert: ${error.message}` : "Could not create alert",
         severity: "error",
       });
+    }
+  };
+
+  const importHistoricalData = async () => {
+    const apiBase = marketEndpoints.apiBaseUrl;
+    const symbol = uploadSymbol.trim().toUpperCase();
+    if (!apiBase) {
+      setNotice({ message: "Connect the market API before importing data", severity: "error" });
+      return;
+    }
+    if (!uploadFile) {
+      setNotice({ message: "Choose a CSV or JSON OHLCV file first", severity: "error" });
+      return;
+    }
+    if (!/^[A-Z0-9._:/-]{1,32}$/.test(symbol)) {
+      setNotice({ message: "Use a symbol with letters, numbers, ., _, :, /, or -", severity: "error" });
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const extension = uploadFile.name.split(".").pop()?.toLowerCase();
+      const sourceFormat = extension === "json" ? "json" : "csv";
+      const params = new URLSearchParams({
+        symbol,
+        timeframe: uploadTimeframe,
+        mode: "replace",
+        format: sourceFormat,
+      });
+      if (uploadName.trim()) params.set("name", uploadName.trim());
+      const response = await fetch(`${apiBase}/historical/import?${params.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": sourceFormat === "json" ? "application/json" : "text/csv" },
+        body: await uploadFile.text(),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.detail === "string" ? payload.detail : `API returned ${response.status}`,
+        );
+      }
+      const imported = historicalAssetOption(payload.asset as HistoricalAssetResponse);
+      setUploadedAssets((current) => {
+        const next = new Map(current.map((asset) => [asset.symbol, asset]));
+        next.set(imported.symbol, imported);
+        return Array.from(next.values());
+      });
+      setSelectedSymbol(imported.symbol);
+      setSelectedTimeframe(uploadTimeframe);
+      setUploadDialogOpen(false);
+      setUploadFile(null);
+      setNotice({
+        message: `${imported.symbol}: ${payload.rows_received} rows imported (${payload.rows_retained} retained)`,
+        severity: "success",
+      });
+    } catch (error) {
+      setNotice({
+        message: error instanceof Error ? `Could not import data: ${error.message}` : "Could not import data",
+        severity: "error",
+      });
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -654,6 +772,24 @@ export default function Dashboard() {
                 }}
               />
               <Button
+                startIcon={<FileUploadRounded />}
+                onClick={() => setUploadDialogOpen(true)}
+                sx={{
+                  height: 30,
+                  px: 1.1,
+                  color: "#b9d9ea",
+                  border: `1px solid ${marketColors.line}`,
+                  borderRadius: "8px",
+                  fontSize: "0.56rem",
+                  fontWeight: 800,
+                  textTransform: "none",
+                  "&:hover": { borderColor: "rgba(69,217,255,0.65)", bgcolor: "rgba(69,217,255,0.08)" },
+                  "& svg": { fontSize: "15px !important" },
+                }}
+              >
+                Import
+              </Button>
+              <Button
                 startIcon={<AddAlertRounded />}
                 onClick={() => setAlertDialogOpen(true)}
                 sx={{
@@ -676,7 +812,7 @@ export default function Dashboard() {
 
           <MarketDashboardContent
             tickers={liveTickers}
-            assetOptions={demoIndexAssets}
+            assetOptions={assetOptions}
             selectedSymbol={selectedSymbol}
             currentValue={feed.currentValue}
             change={(feed.currentValue * feed.changePercent) / 100}
@@ -697,6 +833,95 @@ export default function Dashboard() {
           <MethodologyFooter />
         </Box>
       </Box>
+
+      <Dialog
+        open={uploadDialogOpen}
+        onClose={() => !isUploading && setUploadDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{
+          sx: {
+            color: marketColors.text,
+            bgcolor: "#0b1a2a",
+            backgroundImage: "none",
+            border: `1px solid ${marketColors.line}`,
+            borderRadius: "16px",
+          },
+        }}
+      >
+        <DialogTitle sx={{ fontSize: "1rem", fontWeight: 850 }}>Import historical OHLCV</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ mb: 2, color: marketColors.muted, fontSize: "0.68rem", lineHeight: 1.6 }}>
+            Upload UTF-8 CSV or JSON for any financial symbol. Required fields: timestamp, open, high, low, close. Volume is optional; duplicate timestamps use the last row.
+          </Typography>
+          <Stack spacing={1.5}>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Symbol"
+                placeholder="AAPL, BTC-USD, EUR/USD"
+                value={uploadSymbol}
+                onChange={(event) => setUploadSymbol(event.target.value.toUpperCase())}
+                inputProps={{ maxLength: 32, autoCapitalize: "characters" }}
+              />
+              <FormControl fullWidth size="small">
+                <InputLabel id="import-timeframe-label">Timeframe</InputLabel>
+                <Select
+                  labelId="import-timeframe-label"
+                  value={uploadTimeframe}
+                  label="Timeframe"
+                  onChange={(event) => setUploadTimeframe(event.target.value as ChartTimeframe)}
+                >
+                  <MenuItem value="15m">15 minutes</MenuItem>
+                  <MenuItem value="30m">30 minutes</MenuItem>
+                  <MenuItem value="1h">1 hour</MenuItem>
+                  <MenuItem value="4h">4 hours</MenuItem>
+                  <MenuItem value="1d">1 day</MenuItem>
+                </Select>
+              </FormControl>
+            </Stack>
+            <TextField
+              fullWidth
+              size="small"
+              label="Display name (optional)"
+              placeholder="Apple Inc."
+              value={uploadName}
+              onChange={(event) => setUploadName(event.target.value)}
+              inputProps={{ maxLength: 120 }}
+            />
+            <Box>
+              <Button
+                component="label"
+                startIcon={<FileUploadRounded />}
+                sx={{ color: "#b9d9ea", border: `1px dashed ${marketColors.line}`, textTransform: "none" }}
+              >
+                Choose CSV or JSON file
+                <input
+                  hidden
+                  type="file"
+                  accept=".csv,.json,text/csv,application/json"
+                  onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+                />
+              </Button>
+              <Typography sx={{ mt: 0.8, color: uploadFile ? marketColors.demand : marketColors.muted, fontSize: "0.62rem" }}>
+                {uploadFile ? `${uploadFile.name} · ${(uploadFile.size / 1024).toFixed(1)} KB` : "Maximum 10 MB / 10,000 rows"}
+              </Typography>
+            </Box>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button disabled={isUploading} onClick={() => setUploadDialogOpen(false)} sx={{ color: marketColors.muted }}>Cancel</Button>
+          <Button
+            disabled={isUploading}
+            onClick={importHistoricalData}
+            variant="contained"
+            sx={{ color: "#03131e", bgcolor: marketColors.cyan, fontWeight: 850 }}
+          >
+            {isUploading ? "Importing…" : "Import data"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={alertDialogOpen}

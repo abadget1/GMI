@@ -5,6 +5,7 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import (
     FastAPI,
@@ -22,6 +23,7 @@ from . import __version__
 from .alerts import AlertEngine
 from .config import Settings
 from .domain import AlertRule, Timeframe, primitive
+from .historical import HistoricalDataError, parse_historical_data
 from .ingestion import COMPONENTS, MarketEngine
 from .schemas import AlertEvaluationRequest, AlertRuleCreate
 from .store import InMemoryMarketStore, create_store
@@ -31,6 +33,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 VALID_SYMBOLS = {component.symbol for component in COMPONENTS} | {"GMI"}
+MAX_HISTORICAL_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_HISTORICAL_IMPORT_ROWS = 10_000
 
 
 def _store(request: Request) -> InMemoryMarketStore:
@@ -39,6 +43,11 @@ def _store(request: Request) -> InMemoryMarketStore:
 
 def _alert_engine(request: Request) -> AlertEngine:
     return request.app.state.alert_engine
+
+
+def _known_symbols(request: Request) -> set[str]:
+    imported = getattr(request.app.state, "historical_assets", {})
+    return VALID_SYMBOLS | set(imported)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -52,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.store = store
         app.state.alert_engine = alerts
         app.state.market_engine = engine
+        app.state.historical_assets = {}
         await engine.initialize(periods=min(120, max(20, settings.history_limit - 1)))
         ingestion_task = asyncio.create_task(engine.run(), name="market-ingestion")
         try:
@@ -101,7 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get(f"{settings.api_prefix}/assets", tags=["markets"])
-    async def assets() -> dict:
+    async def assets(request: Request) -> dict:
         return {
             "index": {
                 "symbol": "GMI",
@@ -110,8 +120,94 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "methodology": "fixed-reference normalized weighted return index",
             },
             "components": primitive(COMPONENTS),
+            "imported_assets": primitive(
+                sorted(
+                    getattr(request.app.state, "historical_assets", {}).values(),
+                    key=lambda item: item["symbol"],
+                )
+            ),
             "timeframes": [timeframe.value for timeframe in Timeframe],
         }
+
+    @app.get(f"{settings.api_prefix}/historical/assets", tags=["historical-data"])
+    async def historical_assets(request: Request) -> dict:
+        values = sorted(
+            getattr(request.app.state, "historical_assets", {}).values(),
+            key=lambda item: item["symbol"],
+        )
+        return {"count": len(values), "assets": primitive(values)}
+
+    @app.post(f"{settings.api_prefix}/historical/import", tags=["historical-data"])
+    async def import_historical_data(
+        request: Request,
+        symbol: str = Query(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9._:/-]+$"),
+        timeframe: Timeframe = Query(default=Timeframe.D1),
+        mode: Literal["replace", "merge"] = Query(default="replace"),
+        format: Literal["auto", "csv", "json"] = Query(default="auto"),
+        name: str | None = Query(default=None, max_length=120),
+        asset_class: str = Query(default="custom", max_length=48),
+        currency: str | None = Query(default=None, max_length=12),
+    ) -> dict:
+        """Upload UTF-8 CSV or JSON OHLCV data for any symbol.
+
+        Required columns are timestamp, open, high, low, and close. Volume is
+        optional. `replace` swaps the timeframe history; `merge` retains bars
+        not present in the upload and lets uploaded duplicate timestamps win.
+        """
+
+        body = await request.body()
+        if len(body) > MAX_HISTORICAL_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"upload exceeds the {MAX_HISTORICAL_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+            )
+        normalized_symbol = symbol.upper()
+        try:
+            parsed = parse_historical_data(
+                body,
+                symbol=normalized_symbol,
+                timeframe=timeframe,
+                source_format=format,
+                max_rows=MAX_HISTORICAL_IMPORT_ROWS,
+            )
+        except HistoricalDataError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        retained = await _store(request).replace_candles(
+            normalized_symbol,
+            timeframe,
+            list(parsed.candles),
+            merge=mode == "merge",
+        )
+        registry = request.app.state.historical_assets
+        existing = registry.get(normalized_symbol, {})
+        timeframes = set(existing.get("timeframes", []))
+        timeframes.add(timeframe.value)
+        latest = retained[-1]
+        asset = {
+            "symbol": normalized_symbol,
+            "name": name.strip() if name and name.strip() else existing.get("name", normalized_symbol),
+            "asset_class": asset_class.strip() or "custom",
+            "currency": currency.strip().upper() if currency and currency.strip() else existing.get("currency"),
+            "timeframes": sorted(timeframes, key=lambda item: Timeframe(item).seconds),
+            "last_imported_at": datetime.now(timezone.utc),
+            "latest_close": latest.close,
+            "latest_timestamp": latest.timestamp,
+        }
+        registry[normalized_symbol] = asset
+        return primitive(
+            {
+                "asset": asset,
+                "timeframe": timeframe,
+                "mode": mode,
+                "format": parsed.source_format,
+                "rows_received": parsed.rows_received,
+                "rows_deduplicated": parsed.rows_deduplicated,
+                "rows_retained": len(retained),
+                "history_limit": _store(request).history_limit,
+                "latest_candle": latest,
+            }
+        )
 
     @app.get(f"{settings.api_prefix}/snapshot", tags=["markets"])
     async def snapshot(request: Request) -> dict:
@@ -128,7 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit: int = Query(default=120, ge=1, le=500),
     ) -> dict:
         normalized_symbol = symbol.upper()
-        if normalized_symbol not in VALID_SYMBOLS:
+        if normalized_symbol not in _known_symbols(request):
             raise HTTPException(
                 status_code=404,
                 detail=f"unknown symbol; choose one of {sorted(VALID_SYMBOLS)}",
@@ -169,7 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit: int = Query(default=20, ge=1, le=100),
     ) -> dict:
         normalized_symbol = symbol.upper()
-        if normalized_symbol not in VALID_SYMBOLS:
+        if normalized_symbol not in _known_symbols(request):
             raise HTTPException(status_code=404, detail="unknown symbol")
         history = await _store(request).get_candles(
             normalized_symbol, timeframe, settings.history_limit
@@ -200,7 +296,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     async def create_alert(payload: AlertRuleCreate, request: Request) -> dict:
         symbol = payload.symbol.upper()
-        if symbol not in VALID_SYMBOLS:
+        if symbol not in _known_symbols(request):
             raise HTTPException(status_code=404, detail="unknown symbol")
         rule = AlertRule(
             id=str(uuid.uuid4()),
@@ -231,7 +327,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: AlertEvaluationRequest, request: Request
     ) -> dict:
         symbol = payload.symbol.upper()
-        if symbol not in VALID_SYMBOLS:
+        if symbol not in _known_symbols(request):
             raise HTTPException(status_code=404, detail="unknown symbol")
         history = await _store(request).get_candles(
             symbol, payload.timeframe, settings.history_limit

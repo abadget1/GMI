@@ -65,6 +65,7 @@ starterkit/
 │   ├── app/
 │   │   ├── main.py              # REST, WebSocket, and lifecycle
 │   │   ├── ingestion.py         # async adapter and bar simulation
+│   │   ├── historical.py        # CSV/JSON OHLCV parser and validator
 │   │   ├── calculations.py      # composite and pressure engines
 │   │   ├── zones.py             # structural zone detector
 │   │   ├── alerts.py            # alert transition engine
@@ -90,6 +91,10 @@ starterkit/
 4. The in-memory store is authoritative in this reference service. Redis is an optional best-effort mirror; failures degrade to memory without stopping ingestion.
 5. REST supplies symbol/timeframe history and zones. The WebSocket sends a complete snapshot on connect and on every update, so a dropped frame self-repairs.
 6. A production deployment should make a replayable log authoritative, persist immutable raw and derived events to a time-series store, and switch the WebSocket to sequenced deltas plus gap recovery when payload volume warrants it.
+
+### Historical imports
+
+`POST /api/v1/historical/import` accepts raw UTF-8 CSV or JSON OHLCV data for any symbol and timeframe. It normalizes ISO-8601 or Unix timestamps into the same `Candle` contract used by ingestion, validates OHLC consistency, resolves duplicate timestamps as last-row-wins corrections, and atomically replaces or merges the target in-memory history. Imported symbols appear in the dashboard selector and use the existing candle, zone, and alert endpoints; they remain separate from the configured GMI component universe unless a production index-membership workflow explicitly adds them.
 
 ## Composite index methodology
 

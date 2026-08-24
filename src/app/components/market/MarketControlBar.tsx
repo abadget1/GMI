@@ -36,9 +36,9 @@ function AssetSelector({ assets, selectedSymbol, onAssetChange, fullWidth = fals
       aria-label="Select market composite"
       sx={{
         display: "grid",
-        gridTemplateColumns: `repeat(${Math.max(assets.length, 1)}, minmax(0, 1fr))`,
+        gridTemplateColumns: "repeat(auto-fit, minmax(58px, 1fr))",
         gap: 0.55,
-        width: fullWidth ? "100%" : "auto",
+        width: fullWidth ? "100%" : "min(34vw, 430px)",
         p: 0.45,
         bgcolor: "rgba(3,12,21,0.42)",
         border: `1px solid ${marketColors.line}`,
@@ -234,4 +234,3 @@ export default function MarketControlBar({
     </>
   );
 }
-
