@@ -44,6 +44,11 @@ export interface UseMarketStreamOptions {
   includeTestedZones?: boolean;
   minZoneQuality?: number;
   simulationIntervalMs?: number;
+  /** REST polling cadence when WebSocket transport is disabled. */
+  restRefreshIntervalMs?: number;
+  /** Prefer REST candle close/change over overlapping snapshot symbols. */
+  preferRestCandles?: boolean;
+  onTimeframeResolved?: (timeframe: MarketTimeframe) => void;
 }
 
 export interface MarketFeedState {
@@ -75,6 +80,9 @@ interface ResolvedHookOptions {
   includeTestedZones: boolean;
   minZoneQuality: number;
   simulationIntervalMs: number;
+  restRefreshIntervalMs: number;
+  preferRestCandles: boolean;
+  onTimeframeResolved?: (timeframe: MarketTimeframe) => void;
 }
 
 interface DemoBundle {
@@ -135,6 +143,9 @@ function resolveHookOptions(
     includeTestedZones: options.includeTestedZones ?? true,
     minZoneQuality: Math.min(100, Math.max(0, options.minZoneQuality ?? 0)),
     simulationIntervalMs: Math.max(500, Math.round(options.simulationIntervalMs ?? 1_600)),
+    restRefreshIntervalMs: Math.max(15_000, Math.round(options.restRefreshIntervalMs ?? 60_000)),
+    preferRestCandles: options.preferRestCandles ?? false,
+    onTimeframeResolved: options.onTimeframeResolved,
   };
 }
 
@@ -278,6 +289,9 @@ export function useMarketStream(
     includeTestedZones,
     minZoneQuality,
     simulationIntervalMs,
+    restRefreshIntervalMs,
+    preferRestCandles,
+    onTimeframeResolved,
   } = options;
   const demo = useMemo(
     () =>
@@ -307,6 +321,7 @@ export function useMarketStream(
 
   useEffect(() => {
     let simulationTimer: ReturnType<typeof setInterval> | undefined;
+    let restRefreshTimer: ReturnType<typeof setInterval> | undefined;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let socket: WebSocket | undefined;
     const controller = new AbortController();
@@ -450,11 +465,29 @@ export function useMarketStream(
         lastObservedTickAt = snapshotTime;
       }
       const receivedAt = Date.now();
+      const restCurrentValue = candles?.at(-1)?.close;
+      const restPreviousValue = candles && candles.length > 1 ? candles[candles.length - 2].close : undefined;
+      const restChangePercent =
+        restCurrentValue !== undefined && restPreviousValue !== undefined && restPreviousValue > 0
+          ? ((restCurrentValue / restPreviousValue) - 1) * 100
+          : undefined;
+      const effectiveTimeframe = candles?.at(-1)?.timeframe;
+      if (effectiveTimeframe && effectiveTimeframe !== timeframe) {
+        onTimeframeResolved?.(effectiveTimeframe);
+      }
       setState((current) => {
         const nextZones = zones ?? current.zones;
         const snapshotIsFresh = !snapshot || snapshot.sequence >= lastWireSequence;
-        const selectedValue = snapshotIsFresh ? selected?.currentValue : undefined;
-        const selectedChange = snapshotIsFresh ? selected?.changePercent : undefined;
+        const selectedValue = preferRestCandles
+          ? restCurrentValue
+          : snapshotIsFresh
+            ? selected?.currentValue ?? restCurrentValue
+            : restCurrentValue;
+        const selectedChange = preferRestCandles
+          ? restChangePercent
+          : snapshotIsFresh
+            ? selected?.changePercent ?? restChangePercent
+            : restChangePercent;
         let nextCandles: readonly MarketStreamCandle[] = candles ?? current.candles;
         if (snapshotIsFresh && selected?.liveCandle) {
           nextCandles = mergeLiveCandle(nextCandles, selected.liveCandle, candleLimit);
@@ -474,6 +507,7 @@ export function useMarketStream(
           : [];
         return {
           ...current,
+          timeframe: effectiveTimeframe ?? current.timeframe,
           currentValue: selectedValue ?? current.currentValue,
           changePercent: selectedChange ?? current.changePercent,
           status: current.status === "connected" || !wsUrl ? "connected" : "connecting",
@@ -599,12 +633,15 @@ export function useMarketStream(
     }
 
     if (wsUrl) connectWebSocket();
-    else if (!apiBaseUrl) startSimulation();
+    else if (apiBaseUrl) {
+      restRefreshTimer = setInterval(() => void loadRest(), restRefreshIntervalMs);
+    } else startSimulation();
 
     return () => {
       disposed = true;
       controller.abort();
       stopSimulation();
+      if (restRefreshTimer) clearInterval(restRefreshTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
     };
@@ -616,6 +653,9 @@ export function useMarketStream(
     fallbackValue,
     includeTestedZones,
     minZoneQuality,
+    onTimeframeResolved,
+    preferRestCandles,
+    restRefreshIntervalMs,
     simulationIntervalMs,
     symbol,
     timeframe,

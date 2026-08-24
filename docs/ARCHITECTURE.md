@@ -5,6 +5,7 @@
 ```mermaid
 flowchart LR
     subgraph Sources[Licensed data sources]
+      AV[Alpha Vantage cross-asset REST]
       PX[Equities, indices, FX]
       FLOW[Commodity flows, AIS, customs]
       BOOK[Order-book depth]
@@ -33,6 +34,7 @@ flowchart LR
     end
 
     PX --> ADAPT
+    AV --> ADAPT
     FLOW --> ADAPT
     BOOK --> ADAPT
     MACRO --> ADAPT
@@ -65,6 +67,7 @@ starterkit/
 │   ├── app/
 │   │   ├── main.py              # REST, WebSocket, and lifecycle
 │   │   ├── ingestion.py         # async adapter and bar simulation
+│   │   ├── alpha_vantage.py     # cross-asset live provider and cache
 │   │   ├── historical.py        # CSV/JSON OHLCV parser and validator
 │   │   ├── calculations.py      # composite and pressure engines
 │   │   ├── zones.py             # structural zone detector
@@ -85,7 +88,7 @@ starterkit/
 
 ## Data pipeline
 
-1. The implemented deterministic adapter emits timestamped component prices and seeded historical OHLCV bars. A licensed adapter should add source/event timestamps, data-quality flags, currency/unit normalization, venue calendars, and late-tick watermarks at this boundary.
+1. The Alpha Vantage adapter supplies selected index, index-proxy, FX, crypto, and commodity history. It normalizes provider time zones, deduplicates concurrent requests, caches by symbol/timeframe, resamples 60-minute data into 4-hour bars, and falls back from premium intraday functions to daily data. The deterministic adapter remains the no-key/error fallback.
 2. FastAPI maintains 15-minute, 30-minute, 1-hour, 4-hour, and daily component bars, calculates a normalized GMI candle for each timeframe, and excludes the active candle from zone analysis.
 3. Zone, pressure, and alert engines operate on the same bounded store. Alert rules are evaluated only on their configured symbol and timeframe.
 4. The in-memory store is authoritative in this reference service. Redis is an optional best-effort mirror; failures degrade to memory without stopping ingestion.

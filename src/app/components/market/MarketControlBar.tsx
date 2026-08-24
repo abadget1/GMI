@@ -6,7 +6,7 @@ import DataUsageRounded from "@mui/icons-material/DataUsageRounded";
 import HubRounded from "@mui/icons-material/HubRounded";
 import TuneRounded from "@mui/icons-material/TuneRounded";
 import VerifiedRounded from "@mui/icons-material/VerifiedRounded";
-import { Box, Button, Chip, Drawer, IconButton, Slider, Stack, Typography } from "@mui/material";
+import { Box, Button, Chip, Drawer, FormControl, IconButton, MenuItem, Select, Slider, Stack, Typography } from "@mui/material";
 import { demoIndexAssets } from "./demoData";
 import { marketColors, StatusDot } from "./MarketPanel";
 import type { IndexAssetOption } from "./types";
@@ -30,6 +30,31 @@ interface AssetSelectorProps {
 }
 
 function AssetSelector({ assets, selectedSymbol, onAssetChange, fullWidth = false }: AssetSelectorProps) {
+  if (assets.length > 6) {
+    return (
+      <FormControl size="small" sx={{ width: fullWidth ? "100%" : "min(34vw, 260px)" }}>
+        <Select
+          value={selectedSymbol}
+          onChange={(event) => onAssetChange(event.target.value)}
+          aria-label="Select market asset"
+          sx={{
+            height: 35,
+            color: marketColors.text,
+            bgcolor: "rgba(3,12,21,0.42)",
+            fontSize: "0.62rem",
+            fontWeight: 800,
+            "& .MuiOutlinedInput-notchedOutline": { borderColor: marketColors.line },
+          }}
+        >
+          {assets.map((asset) => (
+            <MenuItem key={asset.symbol} value={asset.symbol} sx={{ fontSize: "0.7rem" }}>
+              {asset.symbol} — {asset.name}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+    );
+  }
   return (
     <Box
       role="group"
@@ -123,6 +148,9 @@ export default function MarketControlBar({
 }: MarketControlBarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const selected = assets.find((asset) => asset.symbol === selectedSymbol) ?? assets[0];
+  const selectedDetail = selected?.dataSource === "alpha_vantage"
+    ? `${selected.assetClass ?? "market"} · ${selected.priceBasis ?? "provider OHLC"}`
+    : `${selected?.componentCount.toLocaleString() ?? "—"} components · synchronized OHLC`;
 
   return (
     <>
@@ -155,7 +183,7 @@ export default function MarketControlBar({
           <Box sx={{ minWidth: 0 }}>
             <Typography noWrap sx={{ fontSize: "0.69rem", fontWeight: 800 }}>{selected?.method ?? "Market-cap blend"}</Typography>
             <Typography noWrap sx={{ mt: 0.25, color: marketColors.muted, fontSize: "0.54rem" }}>
-              {selected?.componentCount.toLocaleString() ?? "—"} components · synchronized OHLC
+              {selectedDetail}
             </Typography>
           </Box>
         </Stack>
@@ -216,7 +244,7 @@ export default function MarketControlBar({
               <DataUsageRounded sx={{ color: marketColors.cyan, fontSize: 19 }} />
               <Box>
                 <Typography sx={{ fontSize: "0.69rem", fontWeight: 800 }}>{selected?.method}</Typography>
-                <Typography sx={{ mt: 0.25, color: marketColors.muted, fontSize: "0.55rem" }}>{selected?.componentCount.toLocaleString()} synchronized components</Typography>
+                <Typography sx={{ mt: 0.25, color: marketColors.muted, fontSize: "0.55rem" }}>{selectedDetail}</Typography>
               </Box>
             </Stack>
             <Stack direction="row" alignItems="center" spacing={0.8} sx={{ mt: 1.3, pt: 1.3, borderTop: `1px solid ${marketColors.line}` }}>

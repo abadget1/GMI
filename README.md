@@ -11,6 +11,7 @@ A real-time cross-asset market dashboard and supply/demand zone engine. The proj
 - Sector pressure heatmaps for energy, agriculture, industrial metals, and semiconductors
 - Configurable, timeframe-specific approach, inside-zone, and crossing alerts
 - REST bootstrap plus WebSocket snapshots, with an in-memory cache and optional Redis mirror
+- Alpha Vantage index, FX, commodity, and crypto candles with quota-aware caching
 - Deterministic simulation, so the full experience works without market-data credentials
 
 ## Quick start
@@ -35,6 +36,21 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 The API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs). Copy `.env.example` to `.env.local` to connect the dashboard to both REST history and the WebSocket stream. Without those variables, the UI uses its deterministic browser simulator and fixtures.
+
+### Alpha Vantage live model
+
+Set `GMI_ALPHA_VANTAGE_API_KEY` in the backend environment, then start both services. The asset selector will expose GMI, SPX, NDX, DJI, EUR/USD, GBP/USD, USD/JPY, BTC/USD, ETH/USD, SOL/USD, WTI, Brent, and natural gas. The browser never receives the API key.
+
+Alpha Vantage intraday equity, index-proxy, FX, and crypto endpoints require an eligible premium entitlement. The adapter requests the selected 15m, 30m, 1h, or 4h interval first and automatically resolves the UI to daily data when the provider reports that intraday is unavailable. Commodity history is daily and close-only by provider contract. A 60-second server cache deduplicates the parallel candle/zone requests and the dashboard polls Alpha-backed assets once per minute.
+
+```bash
+export GMI_ALPHA_VANTAGE_API_KEY=your_key_here
+```
+
+Alternatively, put the settings in `backend/.env.local` and start the API with
+`uvicorn app.main:app --env-file .env.local --reload --port 8000`.
+
+The free Alpha Vantage service is generally limited to 25 API calls per day and one request per second. The backend serializes provider requests with a 1.1-second minimum interval. Increase `GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS` or set `GMI_ALPHA_VANTAGE_INTRADAY_ENABLED=false` when operating on the free tier.
 
 ## Import historical data
 

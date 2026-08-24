@@ -23,6 +23,12 @@ class Settings:
         )
     )
     redis_url: str | None = None
+    alpha_vantage_api_key: str | None = None
+    alpha_vantage_base_url: str = "https://www.alphavantage.co/query"
+    alpha_vantage_cache_ttl_seconds: float = 60.0
+    alpha_vantage_timeout_seconds: float = 12.0
+    alpha_vantage_min_request_interval_seconds: float = 1.1
+    alpha_vantage_intraday_enabled: bool = True
     simulation_interval_seconds: float = 1.0
     history_limit: int = 500
     random_seed: int = 17
@@ -34,12 +40,27 @@ class Settings:
             raise ValueError("simulation interval must be finite and between 0.05 and 3600 seconds")
         if not 20 <= self.history_limit <= 10_000:
             raise ValueError("history limit must be between 20 and 10000")
+        if not isfinite(self.alpha_vantage_cache_ttl_seconds) or not (
+            15 <= self.alpha_vantage_cache_ttl_seconds <= 86_400
+        ):
+            raise ValueError("Alpha Vantage cache TTL must be between 15 and 86400 seconds")
+        if not isfinite(self.alpha_vantage_timeout_seconds) or not (
+            1 <= self.alpha_vantage_timeout_seconds <= 120
+        ):
+            raise ValueError("Alpha Vantage timeout must be between 1 and 120 seconds")
+        if not isfinite(self.alpha_vantage_min_request_interval_seconds) or not (
+            0 <= self.alpha_vantage_min_request_interval_seconds <= 60
+        ):
+            raise ValueError("Alpha Vantage request interval must be between 0 and 60 seconds")
+        if not self.alpha_vantage_base_url.startswith(("https://", "http://")):
+            raise ValueError("Alpha Vantage base URL must be HTTP(S)")
         if not self.api_prefix.startswith("/"):
             raise ValueError("API prefix must start with '/'")
 
     @classmethod
     def from_env(cls) -> "Settings":
         redis_url = os.getenv("GMI_REDIS_URL") or None
+        alpha_vantage_api_key = os.getenv("GMI_ALPHA_VANTAGE_API_KEY") or None
         return cls(
             app_name=os.getenv("GMI_APP_NAME", "Global Market Index API"),
             environment=os.getenv("GMI_ENVIRONMENT", "development"),
@@ -51,6 +72,24 @@ class Settings:
                 )
             ),
             redis_url=redis_url,
+            alpha_vantage_api_key=alpha_vantage_api_key,
+            alpha_vantage_base_url=os.getenv(
+                "GMI_ALPHA_VANTAGE_BASE_URL",
+                "https://www.alphavantage.co/query",
+            ),
+            alpha_vantage_cache_ttl_seconds=float(
+                os.getenv("GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS", "60")
+            ),
+            alpha_vantage_timeout_seconds=float(
+                os.getenv("GMI_ALPHA_VANTAGE_TIMEOUT_SECONDS", "12")
+            ),
+            alpha_vantage_min_request_interval_seconds=float(
+                os.getenv("GMI_ALPHA_VANTAGE_MIN_REQUEST_INTERVAL_SECONDS", "1.1")
+            ),
+            alpha_vantage_intraday_enabled=os.getenv(
+                "GMI_ALPHA_VANTAGE_INTRADAY_ENABLED", "true"
+            ).strip().casefold()
+            not in {"0", "false", "no", "off"},
             simulation_interval_seconds=float(
                 os.getenv("GMI_SIMULATION_INTERVAL_SECONDS", "1.0")
             ),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import AddAlertRounded from "@mui/icons-material/AddAlertRounded";
 import AssessmentRounded from "@mui/icons-material/AssessmentRounded";
 import DashboardRounded from "@mui/icons-material/DashboardRounded";
@@ -60,18 +60,31 @@ interface HistoricalAssetResponse {
   name?: string;
   asset_class?: string;
   latest_close?: number;
+  provider?: string;
+  price_basis?: string;
+  supported_timeframes?: ChartTimeframe[];
 }
 
 function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption {
   const latestClose = asset.latest_close;
+  const isAlphaVantage = asset.provider === "alpha_vantage";
+  const assetClass = ["index", "forex", "commodity", "crypto", "custom"].includes(asset.asset_class ?? "")
+    ? asset.asset_class as IndexAssetOption["assetClass"]
+    : "custom";
   return {
     symbol: asset.symbol.toUpperCase(),
     name: asset.name?.trim() || asset.symbol.toUpperCase(),
     value: typeof latestClose === "number" && Number.isFinite(latestClose) && latestClose > 0 ? latestClose : 1_000,
     change: 0,
     changePercent: 0,
-    method: `Historical import${asset.asset_class ? ` · ${asset.asset_class}` : ""}`,
+    method: isAlphaVantage
+      ? `Alpha Vantage · ${assetClass}`
+      : `Historical import${asset.asset_class ? ` · ${asset.asset_class}` : ""}`,
     componentCount: 0,
+    assetClass,
+    dataSource: isAlphaVantage ? "alpha_vantage" : "historical_import",
+    priceBasis: asset.price_basis,
+    supportedTimeframes: asset.supported_timeframes,
   };
 }
 
@@ -371,6 +384,10 @@ export default function Dashboard() {
   const selectedAsset =
     assetOptions.find((asset) => asset.symbol === selectedSymbol) ??
     assetOptions[0];
+  const isAlphaAsset = selectedAsset.dataSource === "alpha_vantage";
+  const handleResolvedTimeframe = useCallback((timeframe: ChartTimeframe) => {
+    setSelectedTimeframe((current) => current === timeframe ? current : timeframe);
+  }, []);
   const feed = useMarketStream({
     symbol: selectedSymbol,
     timeframe: selectedTimeframe,
@@ -378,6 +395,10 @@ export default function Dashboard() {
     fallbackChangePercent: selectedAsset.changePercent,
     candleLimit: 120,
     minZoneQuality: 45,
+    wsUrl: isAlphaAsset ? null : undefined,
+    preferRestCandles: isAlphaAsset,
+    restRefreshIntervalMs: 60_000,
+    onTimeframeResolved: handleResolvedTimeframe,
   });
 
   const marketEndpoints = useMemo(
@@ -393,14 +414,21 @@ export default function Dashboard() {
     const apiBase = marketEndpoints.apiBaseUrl;
     if (!apiBase) return;
     const controller = new AbortController();
-    fetch(`${apiBase}/historical/assets`, { signal: controller.signal })
+    fetch(`${apiBase}/assets`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`API returned ${response.status}`);
-        return response.json() as Promise<{ assets?: HistoricalAssetResponse[] }>;
+        return response.json() as Promise<{
+          live_assets?: HistoricalAssetResponse[];
+          imported_assets?: HistoricalAssetResponse[];
+        }>;
       })
       .then((payload) => {
-        if (!controller.signal.aborted && Array.isArray(payload.assets)) {
-          setUploadedAssets(payload.assets.map(historicalAssetOption));
+        if (!controller.signal.aborted) {
+          const assets = [
+            ...(Array.isArray(payload.live_assets) ? payload.live_assets : []),
+            ...(Array.isArray(payload.imported_assets) ? payload.imported_assets : []),
+          ];
+          setUploadedAssets(assets.map(historicalAssetOption));
         }
       })
       .catch(() => {
@@ -439,18 +467,31 @@ export default function Dashboard() {
   }, []);
 
   const liveTickers = useMemo(
-    () =>
-      demoTickers.map((ticker) =>
+    () => {
+      const updated = demoTickers.map((ticker) =>
         ticker.symbol === selectedSymbol
           ? {
               ...ticker,
               value: feed.currentValue,
               changePercent: feed.changePercent,
               change: (feed.currentValue * feed.changePercent) / 100,
-            }
+          }
           : ticker,
-      ),
-    [feed.changePercent, feed.currentValue, selectedSymbol],
+      );
+      if (updated.some((ticker) => ticker.symbol === selectedSymbol)) return updated;
+      return [
+        {
+          symbol: selectedSymbol,
+          name: selectedAsset.name,
+          value: feed.currentValue,
+          changePercent: feed.changePercent,
+          change: (feed.currentValue * feed.changePercent) / 100,
+          precision: feed.currentValue < 10 ? 4 : 2,
+        },
+        ...updated,
+      ];
+    },
+    [feed.changePercent, feed.currentValue, selectedAsset.name, selectedSymbol],
   );
 
   const chooseNavigation = (item: string) => {
@@ -469,7 +510,7 @@ export default function Dashboard() {
             symbol: selectedSymbol,
             zone_side: alertSide,
             mode: alertMode,
-            timeframe: selectedTimeframe.toLowerCase(),
+            timeframe: feed.timeframe,
             threshold_pct: alertThreshold,
             cooldown_seconds: 300,
           }),
@@ -494,7 +535,7 @@ export default function Dashboard() {
       ]);
       setAlertDialogOpen(false);
       setNotice({
-        message: `${selectedSymbol} ${selectedTimeframe.toUpperCase()} ${alertMode} alert armed`,
+        message: `${selectedSymbol} ${feed.timeframe.toUpperCase()} ${alertMode} alert armed`,
         severity: "success",
       });
     } catch (error) {
@@ -822,7 +863,7 @@ export default function Dashboard() {
             candles={viewCandles}
             zones={viewZones}
             heatmap={viewHeatmap}
-            timeframe={selectedTimeframe}
+            timeframe={feed.timeframe}
             onAssetChange={setSelectedSymbol}
             onAlertThresholdChange={setAlertThreshold}
             onTimeframeChange={setSelectedTimeframe}
@@ -941,7 +982,7 @@ export default function Dashboard() {
         <DialogTitle sx={{ fontSize: "1rem", fontWeight: 850 }}>Create zone alert</DialogTitle>
         <DialogContent>
           <Typography sx={{ mb: 2, color: marketColors.muted, fontSize: "0.68rem", lineHeight: 1.6 }}>
-            Arm a {selectedSymbol} rule on the active {selectedTimeframe.toUpperCase()} timeframe at the ±{alertThreshold.toFixed(1)}% threshold.
+            Arm a {selectedSymbol} rule on the active {feed.timeframe.toUpperCase()} timeframe at the ±{alertThreshold.toFixed(1)}% threshold.
           </Typography>
           <Stack spacing={1.5}>
             <FormControl fullWidth size="small">

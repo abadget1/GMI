@@ -24,6 +24,10 @@ export interface IndexAssetOption {
   changePercent: number;
   method: string;
   componentCount: number;
+  assetClass?: "index" | "forex" | "commodity" | "crypto" | "custom";
+  dataSource?: "alpha_vantage" | "historical_import" | "simulator";
+  priceBasis?: string;
+  supportedTimeframes?: ChartTimeframe[];
 }
 
 export interface ActivityRegion {

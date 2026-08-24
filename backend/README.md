@@ -2,8 +2,9 @@
 
 FastAPI backend for the real-time Global Market Index dashboard. It ships with
 a deterministic synthetic feed so the full UI can run without vendor keys. The
-`SyntheticMarketFeed` boundary is intentionally small and can be replaced by a
-licensed market-data adapter.
+`SyntheticMarketFeed` remains the zero-credential fallback. Setting
+`GMI_ALPHA_VANTAGE_API_KEY` enables the built-in quota-aware Alpha Vantage
+adapter for indices, forex, commodities, crypto, and the normalized GMI.
 
 ## Run locally
 
@@ -13,6 +14,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
+
+When using a local ignored environment file, start with
+`uvicorn app.main:app --env-file .env.local --reload --port 8000`.
 
 Open `http://localhost:8000/docs`, or start the API and Redis together with:
 
@@ -30,6 +34,13 @@ docker compose up --build
 - `POST /api/v1/alerts` — register timeframe-specific approach, cross, or inside-zone alerts.
 - `POST /api/v1/alerts/evaluate` — explicit alert evaluation hook.
 - `WS /ws/market` — bounded, live `market.snapshot` messages.
+
+`GET /api/v1/index/candles` and `GET /api/v1/zones/{symbol}` resolve data in
+this order: user-uploaded history, Alpha Vantage, then the deterministic core
+fallback. Responses include `requested_timeframe`, effective `timeframe`, and
+source metadata. Premium intraday entitlement failures automatically fall back
+to Alpha Vantage daily endpoints; direct indices use SPY/QQQ/DIA ETF proxies
+when the premium `INDEX_DATA` endpoint is unavailable.
 
 Snapshot zone fields are deliberately dual-published during the browser
 contract transition:

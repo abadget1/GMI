@@ -20,6 +20,13 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
+from .alpha_vantage import (
+    ALPHA_ASSET_BY_SYMBOL,
+    ALPHA_ASSETS,
+    AlphaSeriesResult,
+    AlphaVantageClient,
+    AlphaVantageError,
+)
 from .alerts import AlertEngine
 from .config import Settings
 from .domain import AlertRule, Timeframe, primitive
@@ -47,10 +54,54 @@ def _alert_engine(request: Request) -> AlertEngine:
 
 def _known_symbols(request: Request) -> set[str]:
     imported = getattr(request.app.state, "historical_assets", {})
-    return VALID_SYMBOLS | set(imported)
+    return VALID_SYMBOLS | set(ALPHA_ASSET_BY_SYMBOL) | set(imported)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+async def _market_history(
+    request: Request,
+    symbol: str,
+    timeframe: Timeframe,
+    limit: int,
+) -> tuple[list, Timeframe, dict | None]:
+    """Resolve uploaded, Alpha Vantage, then simulator history in that order."""
+
+    imported = getattr(request.app.state, "historical_assets", {})
+    alpha: AlphaVantageClient = request.app.state.alpha_vantage
+    alpha_symbol = symbol == "GMI" or symbol in ALPHA_ASSET_BY_SYMBOL
+    if symbol not in imported and alpha_symbol and alpha.configured:
+        try:
+            result: AlphaSeriesResult = await alpha.get_candles(symbol, timeframe)
+            return list(result.candles)[-limit:], result.effective_timeframe, result.metadata()
+        except AlphaVantageError as exc:
+            fallback = await _store(request).get_candles(symbol, timeframe, limit)
+            if fallback:
+                return fallback, timeframe, {
+                    "provider": "simulator_fallback",
+                    "fallback_reason": str(exc),
+                    "requested_timeframe": timeframe.value,
+                    "effective_timeframe": timeframe.value,
+                }
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    history = await _store(request).get_candles(symbol, timeframe, limit)
+    if not history and alpha_symbol and not alpha.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="Alpha Vantage is not configured; set GMI_ALPHA_VANTAGE_API_KEY.",
+        )
+    source = "historical_import" if symbol in imported else "simulator"
+    return history, timeframe, {
+        "provider": source,
+        "requested_timeframe": timeframe.value,
+        "effective_timeframe": timeframe.value,
+    }
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    alpha_vantage: AlphaVantageClient | None = None,
+) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -58,9 +109,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store = await create_store(settings)
         alerts = AlertEngine()
         engine = MarketEngine(store, settings, alerts)
+        alpha = alpha_vantage or AlphaVantageClient(settings)
         app.state.store = store
         app.state.alert_engine = alerts
         app.state.market_engine = engine
+        app.state.alpha_vantage = alpha
         app.state.historical_assets = {}
         await engine.initialize(periods=min(120, max(20, settings.history_limit - 1)))
         ingestion_task = asyncio.create_task(engine.run(), name="market-ingestion")
@@ -72,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await ingestion_task
             except asyncio.CancelledError:
                 pass
+            await alpha.close()
             await store.close()
 
     app = FastAPI(
@@ -112,6 +166,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(f"{settings.api_prefix}/assets", tags=["markets"])
     async def assets(request: Request) -> dict:
+        alpha_catalog = [
+            {
+                "symbol": "GMI",
+                "name": "Global Market Index",
+                "asset_class": "index",
+                "provider": "alpha_vantage",
+                "provider_symbol": "SPX+NDX",
+                "currency": "normalized",
+                "price_basis": "50/50 normalized SPX and NDX",
+                "supported_timeframes": [item.value for item in Timeframe],
+            },
+            *[asset.public_contract() for asset in ALPHA_ASSETS],
+        ]
         return {
             "index": {
                 "symbol": "GMI",
@@ -120,6 +187,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "methodology": "fixed-reference normalized weighted return index",
             },
             "components": primitive(COMPONENTS),
+            "provider": {
+                "name": "alpha_vantage",
+                "configured": request.app.state.alpha_vantage.configured,
+                "intraday_enabled": settings.alpha_vantage_intraday_enabled,
+                "daily_fallback": True,
+            },
+            "asset_catalog": alpha_catalog,
+            "live_assets": alpha_catalog if request.app.state.alpha_vantage.configured else [],
             "imported_assets": primitive(
                 sorted(
                     getattr(request.app.state, "historical_assets", {}).values(),
@@ -229,14 +304,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=404,
                 detail=f"unknown symbol; choose one of {sorted(VALID_SYMBOLS)}",
             )
-        values = await _store(request).get_candles(
-            normalized_symbol, timeframe, limit
+        values, effective_timeframe, provider = await _market_history(
+            request, normalized_symbol, timeframe, limit
         )
         return {
             "symbol": normalized_symbol,
-            "timeframe": timeframe.value,
+            "requested_timeframe": timeframe.value,
+            "timeframe": effective_timeframe.value,
             "count": len(values),
             "candles": primitive(values),
+            "source": provider,
         }
 
     @app.get(f"{settings.api_prefix}/pressure", tags=["supply-demand"])
@@ -267,8 +344,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         normalized_symbol = symbol.upper()
         if normalized_symbol not in _known_symbols(request):
             raise HTTPException(status_code=404, detail="unknown symbol")
-        history = await _store(request).get_candles(
-            normalized_symbol, timeframe, settings.history_limit
+        history, effective_timeframe, provider = await _market_history(
+            request, normalized_symbol, timeframe, settings.history_limit
         )
         detected = detect_zones(
             completed_candles(history, as_of=datetime.now(timezone.utc)),
@@ -279,9 +356,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
         return {
             "symbol": normalized_symbol,
-            "timeframe": timeframe.value,
+            "requested_timeframe": timeframe.value,
+            "timeframe": effective_timeframe.value,
             "count": len(filtered),
             "zones": primitive(filtered),
+            "source": provider,
         }
 
     @app.get(f"{settings.api_prefix}/alerts", tags=["alerts"])
@@ -329,8 +408,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         symbol = payload.symbol.upper()
         if symbol not in _known_symbols(request):
             raise HTTPException(status_code=404, detail="unknown symbol")
-        history = await _store(request).get_candles(
-            symbol, payload.timeframe, settings.history_limit
+        history, _, _ = await _market_history(
+            request, symbol, payload.timeframe, settings.history_limit
         )
         active_zones = detect_zones(
             completed_candles(history, as_of=datetime.now(timezone.utc))
