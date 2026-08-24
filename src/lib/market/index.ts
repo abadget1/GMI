@@ -1,6 +1,5 @@
 export * from "./alerts";
 export * from "./composite";
-export * from "./demo-data";
 export * from "./market-stream-adapter";
 export * from "./scoring";
 export * from "./timeframes";

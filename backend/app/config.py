@@ -25,10 +25,13 @@ class Settings:
     redis_url: str | None = None
     alpha_vantage_api_key: str | None = None
     alpha_vantage_base_url: str = "https://www.alphavantage.co/query"
-    alpha_vantage_cache_ttl_seconds: float = 60.0
+    alpha_vantage_cache_ttl_seconds: float = 21_600.0
+    alpha_vantage_daily_request_limit: int = 25
     alpha_vantage_timeout_seconds: float = 12.0
     alpha_vantage_min_request_interval_seconds: float = 1.1
-    alpha_vantage_intraday_enabled: bool = True
+    # Free-tier safe default: daily endpoints only. Intraday is opt-in because
+    # it is both quota-expensive and commonly entitlement-limited.
+    alpha_vantage_intraday_enabled: bool = False
     simulation_interval_seconds: float = 1.0
     history_limit: int = 500
     random_seed: int = 17
@@ -44,6 +47,8 @@ class Settings:
             15 <= self.alpha_vantage_cache_ttl_seconds <= 86_400
         ):
             raise ValueError("Alpha Vantage cache TTL must be between 15 and 86400 seconds")
+        if not 1 <= self.alpha_vantage_daily_request_limit <= 25:
+            raise ValueError("Alpha Vantage daily request limit must be between 1 and 25")
         if not isfinite(self.alpha_vantage_timeout_seconds) or not (
             1 <= self.alpha_vantage_timeout_seconds <= 120
         ):
@@ -78,7 +83,10 @@ class Settings:
                 "https://www.alphavantage.co/query",
             ),
             alpha_vantage_cache_ttl_seconds=float(
-                os.getenv("GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS", "60")
+                os.getenv("GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS", "21600")
+            ),
+            alpha_vantage_daily_request_limit=int(
+                os.getenv("GMI_ALPHA_VANTAGE_DAILY_REQUEST_LIMIT", "25")
             ),
             alpha_vantage_timeout_seconds=float(
                 os.getenv("GMI_ALPHA_VANTAGE_TIMEOUT_SECONDS", "12")
@@ -87,7 +95,7 @@ class Settings:
                 os.getenv("GMI_ALPHA_VANTAGE_MIN_REQUEST_INTERVAL_SECONDS", "1.1")
             ),
             alpha_vantage_intraday_enabled=os.getenv(
-                "GMI_ALPHA_VANTAGE_INTRADAY_ENABLED", "true"
+                "GMI_ALPHA_VANTAGE_INTRADAY_ENABLED", "false"
             ).strip().casefold()
             not in {"0", "false", "no", "off"},
             simulation_interval_seconds=float(

@@ -42,12 +42,10 @@ import {
   adaptCandlesForView,
   adaptPressureForView,
   adaptZonesForView,
-  demoAlerts,
-  demoIndexAssets,
-  demoTickers,
   marketColors,
   StatusDot,
   type ChartTimeframe,
+  type HeatmapMetric,
   type IndexAssetOption,
   type MarketAlert,
 } from "@/app/components/market";
@@ -98,6 +96,33 @@ interface HistoricalAssetResponse {
   supported_timeframes?: ChartTimeframe[];
 }
 
+interface AlphaBoardItem {
+  symbol: string;
+  name?: string;
+  asset_class?: string;
+  price?: number;
+  change_percent?: number;
+}
+
+function alphaBoardMetric(item: AlphaBoardItem): HeatmapMetric | null {
+  if (!item.symbol || typeof item.price !== "number" || !Number.isFinite(item.price)) return null;
+  const change = typeof item.change_percent === "number" && Number.isFinite(item.change_percent)
+    ? item.change_percent
+    : 0;
+  const group: HeatmapMetric["group"] = item.asset_class === "commodity"
+    ? item.symbol === "COPPER" ? "Industrial metals" : item.symbol === "WHEAT" ? "Agriculture" : "Energy"
+    : "Momentum";
+  return {
+    id: `alpha-${item.symbol}`,
+    name: item.name?.trim() || item.symbol,
+    ticker: item.symbol,
+    group,
+    pressure: Math.max(-100, Math.min(100, change * 20)),
+    changePercent: change,
+    flowLabel: `${item.price < 10 ? item.price.toFixed(4) : item.price.toFixed(2)} live`,
+  };
+}
+
 function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption {
   const latestClose = asset.latest_close;
   const isAlphaVantage = asset.provider === "alpha_vantage";
@@ -107,7 +132,7 @@ function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption
   return {
     symbol: asset.symbol.toUpperCase(),
     name: asset.name?.trim() || asset.symbol.toUpperCase(),
-    value: typeof latestClose === "number" && Number.isFinite(latestClose) && latestClose > 0 ? latestClose : 1_000,
+    value: typeof latestClose === "number" && Number.isFinite(latestClose) && latestClose > 0 ? latestClose : 0,
     change: 0,
     changePercent: 0,
     method: isAlphaVantage
@@ -219,7 +244,7 @@ function SidebarContent({
 }: {
   activeItem: string;
   onSelect: (item: string) => void;
-  feedStatus: "connecting" | "connected" | "simulated";
+  feedStatus: "connecting" | "connected" | "unavailable";
   alertCount: number;
   timeframe: ChartTimeframe;
   isImported: boolean;
@@ -362,7 +387,7 @@ function SidebarContent({
                   ? "API stream connected"
                 : feedStatus === "connecting"
                   ? "Connecting to stream"
-                  : "Deterministic demo feed"}
+                  : "API unavailable"}
             </Typography>
           </Stack>
           <Typography sx={{ mt: 0.75, color: marketColors.muted, fontSize: "0.52rem", lineHeight: 1.55 }}>
@@ -461,6 +486,7 @@ export default function Dashboard() {
   const [alertMode, setAlertMode] = useState<"approach" | "inside" | "cross">("approach");
   const [alerts, setAlerts] = useState<MarketAlert[]>([]);
   const [uploadedAssets, setUploadedAssets] = useState<IndexAssetOption[]>([]);
+  const [alphaHeatmap, setAlphaHeatmap] = useState<HeatmapMetric[]>([]);
   const [localDatasets, setLocalDatasets] = useState<Record<string, LocalHistoricalDataset>>({});
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -476,14 +502,23 @@ export default function Dashboard() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const assetOptions = useMemo(() => {
-    const merged = new Map(demoIndexAssets.map((asset) => [asset.symbol, asset]));
-    uploadedAssets.forEach((asset) => merged.set(asset.symbol, asset));
-    return Array.from(merged.values());
+    return uploadedAssets;
   }, [uploadedAssets]);
 
   const selectedAsset =
     assetOptions.find((asset) => asset.symbol === selectedSymbol) ??
-    assetOptions[0];
+    assetOptions[0] ??
+    {
+      symbol: selectedSymbol,
+      name: selectedSymbol,
+      value: 0,
+      change: 0,
+      changePercent: 0,
+      method: "Waiting for API data",
+      componentCount: 0,
+      assetClass: "custom" as const,
+      dataSource: "alpha_vantage" as const,
+    };
   const isRestOnlyAsset = selectedAsset.dataSource === "alpha_vantage" || selectedAsset.dataSource === "historical_import";
   const handleResolvedTimeframe = useCallback((timeframe: ChartTimeframe) => {
     setSelectedTimeframe((current) => current === timeframe ? current : timeframe);
@@ -591,6 +626,29 @@ export default function Dashboard() {
     return () => controller.abort();
   }, [marketEndpoints.apiBaseUrl]);
 
+  useEffect(() => {
+    const apiBase = marketEndpoints.apiBaseUrl;
+    if (!apiBase) return;
+    const controller = new AbortController();
+    fetch(`${apiBase}/alpha/board?asset_class=commodity&limit=5`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Alpha board returned ${response.status}`);
+        return response.json() as Promise<{ items?: AlphaBoardItem[] }>;
+      })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        setAlphaHeatmap(
+          (Array.isArray(payload.items) ? payload.items : [])
+            .map(alphaBoardMetric)
+            .filter((metric): metric is HeatmapMetric => metric !== null),
+        );
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setAlphaHeatmap([]);
+      });
+    return () => controller.abort();
+  }, [marketEndpoints.apiBaseUrl]);
+
   const viewCandles = useMemo(() => adaptCandlesForView(feed.candles), [feed.candles]);
   const viewZones = useMemo(() => adaptZonesForView(feed.zones), [feed.zones]);
   const globalHeatmap = useMemo(() => adaptPressureForView(feed.pressure), [feed.pressure]);
@@ -602,7 +660,9 @@ export default function Dashboard() {
     () => deriveHistoricalHeatmap(viewCandles, viewZones, selectedSymbol),
     [selectedSymbol, viewCandles, viewZones],
   );
-  const synchronizedHeatmap = selectedAsset.dataSource === "historical_import" || feed.source === "upload"
+  const synchronizedHeatmap = alphaHeatmap.length > 0
+    ? alphaHeatmap
+    : selectedAsset.dataSource === "historical_import" || feed.source === "upload"
     ? historicalHeatmap
     : globalHeatmap.length > 0
       ? globalHeatmap
@@ -623,14 +683,12 @@ export default function Dashboard() {
     ? `Updated ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(feed.updatedAt)}`
     : "Awaiting first update";
   const allAlerts = useMemo(() => {
-    const demoFeedAlerts = feed.source === "demo" ? demoAlerts : [];
     const combined = [
       ...adaptAlertsForView(feed.alerts),
       ...alerts,
-      ...demoFeedAlerts,
     ];
     return Array.from(new Map(combined.map((alert) => [alert.id, alert])).values());
-  }, [alerts, feed.alerts, feed.source]);
+  }, [alerts, feed.alerts]);
   const visibleAlerts = allAlerts.slice(0, 8);
 
   useEffect(() => {
@@ -673,17 +731,7 @@ export default function Dashboard() {
           session: `${feed.timeframe.toUpperCase()} uploaded series`,
         }];
       }
-      const updated = demoTickers.map((ticker) =>
-        ticker.symbol === selectedSymbol
-          ? {
-              ...ticker,
-              value: feed.currentValue,
-              changePercent: feed.changePercent,
-              change: (feed.currentValue * feed.changePercent) / 100,
-          }
-          : ticker,
-      );
-      if (updated.some((ticker) => ticker.symbol === selectedSymbol)) return updated;
+      if (!Number.isFinite(feed.currentValue) || feed.currentValue <= 0) return [];
       return [
         {
           symbol: selectedSymbol,
@@ -693,7 +741,6 @@ export default function Dashboard() {
           change: (feed.currentValue * feed.changePercent) / 100,
           precision: feed.currentValue < 10 ? 4 : 2,
         },
-        ...updated,
       ];
     },
     [feed.changePercent, feed.currentValue, feed.source, feed.timeframe, quoteChange, selectedAsset.dataSource, selectedAsset.name, selectedSymbol],
@@ -1041,7 +1088,7 @@ export default function Dashboard() {
               color={feed.status === "connected" ? marketColors.demand : marketColors.warning}
             />
             <Typography sx={{ color: "#a7b6c8", fontSize: "0.56rem", fontWeight: 700 }}>
-              {feed.source === "upload" ? "Uploaded data" : feed.status === "connected" ? "Live API" : "Demo stream"}
+              {feed.source === "upload" ? "Uploaded data" : feed.status === "connected" ? "Live API" : feed.status === "connecting" ? "Connecting to API" : "API unavailable"}
             </Typography>
           </Stack>
           <Typography

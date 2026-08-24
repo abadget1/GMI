@@ -36,17 +36,6 @@ export {
   adaptZonesForView,
 } from "./liveDataAdapter";
 
-export {
-  demoAlerts,
-  demoCandles,
-  demoHeatmap,
-  demoIndexAssets,
-  demoRegions,
-  demoTickers,
-  demoWatchlist,
-  demoZones,
-} from "./demoData";
-
 export type {
   ActivityRegion,
   AlertCondition,

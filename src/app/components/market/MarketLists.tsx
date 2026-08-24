@@ -5,7 +5,6 @@ import ArrowForwardRounded from "@mui/icons-material/ArrowForwardRounded";
 import NotificationsActiveRounded from "@mui/icons-material/NotificationsActiveRounded";
 import TuneRounded from "@mui/icons-material/TuneRounded";
 import { Box, Button, Chip, IconButton, Stack, Typography } from "@mui/material";
-import { demoAlerts, demoWatchlist } from "./demoData";
 import { formatMarketValue, marketColors, MarketPanel, StatusDot } from "./MarketPanel";
 import type { MarketAlert, WatchlistAsset } from "./types";
 
@@ -27,7 +26,7 @@ function conditionLabel(alert: MarketAlert) {
 }
 
 export function AlertsPanel({
-  alerts = demoAlerts,
+  alerts = [],
   onCreateAlert,
   onOpenAlert,
 }: AlertsPanelProps) {
@@ -141,7 +140,7 @@ export interface WatchlistStripProps {
 }
 
 export function WatchlistStrip({
-  assets = demoWatchlist,
+  assets = [],
   onViewAll,
   onAssetSelect,
 }: WatchlistStripProps) {

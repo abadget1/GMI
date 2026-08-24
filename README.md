@@ -36,13 +36,13 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-The API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs). Copy `.env.example` to `.env.local` to connect the dashboard to both REST history and the WebSocket stream. Without those variables, the UI uses its deterministic browser simulator and fixtures.
+The API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs). Copy `.env.example` to `.env.local` to connect the dashboard to both REST history and the WebSocket stream. Without those variables, the dashboard reports that live API data is unavailable.
 
 ### Alpha Vantage live model
 
 Set `GMI_ALPHA_VANTAGE_API_KEY` in the backend environment, then start both services. The asset selector will expose GMI, SPX, NDX, DJI, EUR/USD, GBP/USD, USD/JPY, BTC/USD, ETH/USD, SOL/USD, WTI, Brent, and natural gas. The browser never receives the API key.
 
-Alpha Vantage intraday equity, index-proxy, FX, and crypto endpoints require an eligible premium entitlement. The adapter requests the selected 15m, 30m, 1h, or 4h interval first and automatically resolves the UI to daily data when the provider reports that intraday is unavailable. Commodity history is daily and close-only by provider contract. A 60-second server cache deduplicates the parallel candle/zone requests and the dashboard polls Alpha-backed assets once per minute.
+The free-tier-safe default requests daily data: `DIGITAL_CURRENCY_DAILY`, daily commodity functions, and `TIME_SERIES_DAILY` ETF proxies. Intraday is opt-in only; when unavailable, the UI resolves to daily data. Commodity history is daily and close-only by provider contract. A six-hour server cache deduplicates reloads, and the last successful provider result is retained as a stale fallback when the provider or daily quota is unavailable.
 
 ```bash
 export GMI_ALPHA_VANTAGE_API_KEY=your_key_here
@@ -51,7 +51,7 @@ export GMI_ALPHA_VANTAGE_API_KEY=your_key_here
 Alternatively, put the settings in `backend/.env.local` and start the API with
 `uvicorn app.main:app --env-file .env.local --reload --port 8000`.
 
-The free Alpha Vantage service is generally limited to 25 API calls per day and one request per second. The backend serializes provider requests with a 1.1-second minimum interval. Increase `GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS` or set `GMI_ALPHA_VANTAGE_INTRADAY_ENABLED=false` when operating on the free tier.
+The free Alpha Vantage service is generally limited to 25 API calls per day and one request per second. The backend serializes provider requests with a 1.1-second minimum interval and enforces the daily budget locally. Increase `GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS` or set `GMI_ALPHA_VANTAGE_INTRADAY_ENABLED=false` when operating on the free tier.
 
 ## Import historical data
 

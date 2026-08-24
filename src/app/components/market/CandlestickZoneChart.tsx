@@ -6,7 +6,6 @@ import BoltRounded from "@mui/icons-material/BoltRounded";
 import CloseRounded from "@mui/icons-material/CloseRounded";
 import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import { Box, Button, Chip, Dialog, DialogContent, IconButton, Stack, Tooltip, Typography } from "@mui/material";
-import { demoCandles, demoZones } from "./demoData";
 import { formatMarketValue, marketColors, MarketPanel, StatusDot } from "./MarketPanel";
 import type { Candle, PriceZone } from "./types";
 
@@ -78,13 +77,13 @@ function timeframeLabel(value: string) {
 }
 
 function CandlestickChartPanel({
-  candles = demoCandles,
-  zones = demoZones,
+  candles = [],
+  zones = [],
   symbol = "GMI",
   name = "Global Market Index",
-  currentValue = 1092.79,
-  change = 4.83,
-  changePercent = 0.45,
+  currentValue = 0,
+  change = 0,
+  changePercent = 0,
   timeframe: controlledTimeframe,
   initialTimeframe = "15m",
   timeframes = ["15m", "30m", "1h", "4h", "1d"],

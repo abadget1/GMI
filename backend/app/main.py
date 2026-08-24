@@ -23,9 +23,11 @@ from . import __version__
 from .alpha_vantage import (
     ALPHA_ASSET_BY_SYMBOL,
     ALPHA_ASSETS,
+    AlphaAssetClass,
     AlphaSeriesResult,
     AlphaVantageClient,
     AlphaVantageError,
+    AlphaVantageRateLimitError,
 )
 from .alerts import AlertEngine
 from .config import Settings
@@ -72,6 +74,8 @@ async def _market_history(
         try:
             result: AlphaSeriesResult = await alpha.get_candles(symbol, timeframe)
             return list(result.candles)[-limit:], result.effective_timeframe, result.metadata()
+        except AlphaVantageRateLimitError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
         except AlphaVantageError as exc:
             fallback = await _store(request).get_candles(symbol, timeframe, limit)
             if fallback:
@@ -330,6 +334,40 @@ def create_app(
             "scale": {"minimum": -100, "maximum": 100, "positive": "demand"},
             "generated_at": primitive(latest.generated_at),
             "items": primitive(values),
+        }
+
+    @app.get(f"{settings.api_prefix}/alpha/board", tags=["markets"])
+    async def alpha_board(
+        request: Request,
+        asset_class: str | None = Query(default=None),
+        limit: int = Query(default=8, ge=1, le=8),
+    ) -> dict:
+        """Return cached Alpha Vantage daily quotes for boards and heatmaps."""
+        alpha: AlphaVantageClient = request.app.state.alpha_vantage
+        if not alpha.configured:
+            raise HTTPException(
+                status_code=503,
+                detail="Alpha Vantage is not configured; set GMI_ALPHA_VANTAGE_API_KEY.",
+            )
+        normalized_class: AlphaAssetClass | None = None
+        if asset_class:
+            try:
+                normalized_class = AlphaAssetClass(asset_class.casefold())
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported asset_class; choose one of {[item.value for item in AlphaAssetClass]}",
+                ) from exc
+        try:
+            items = await alpha.get_board(normalized_class, limit)
+        except AlphaVantageRateLimitError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except AlphaVantageError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "count": len(items),
+            "items": primitive(items),
+            "remaining_requests": alpha.daily_requests_remaining,
         }
 
     @app.get(f"{settings.api_prefix}/zones/{{symbol}}", tags=["supply-demand"])

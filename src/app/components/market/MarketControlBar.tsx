@@ -7,7 +7,6 @@ import HubRounded from "@mui/icons-material/HubRounded";
 import TuneRounded from "@mui/icons-material/TuneRounded";
 import VerifiedRounded from "@mui/icons-material/VerifiedRounded";
 import { Box, Button, Chip, Drawer, FormControl, IconButton, MenuItem, Select, Slider, Stack, Typography } from "@mui/material";
-import { demoIndexAssets } from "./demoData";
 import { marketColors, StatusDot } from "./MarketPanel";
 import type { IndexAssetOption } from "./types";
 
@@ -137,7 +136,7 @@ function ThresholdControl({
 }
 
 export default function MarketControlBar({
-  assets = demoIndexAssets,
+  assets = [],
   selectedSymbol,
   alertThreshold,
   onAssetChange,

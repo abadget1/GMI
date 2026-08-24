@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import FilterAltRounded from "@mui/icons-material/FilterAltRounded";
 import { Box, Button, Chip, Stack, Tooltip, Typography } from "@mui/material";
-import { demoHeatmap } from "./demoData";
 import { marketColors, MarketPanel } from "./MarketPanel";
 import type { HeatmapGroup, HeatmapMetric } from "./types";
 
@@ -32,7 +31,7 @@ function signalColor(pressure: number) {
 }
 
 export default function SupplyDemandHeatmap({
-  metrics = demoHeatmap,
+  metrics = [],
   title = "Supply & demand pressure",
   initialGroup = "All",
   onMetricSelect,

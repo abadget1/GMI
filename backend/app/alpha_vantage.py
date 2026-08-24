@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
@@ -35,7 +35,7 @@ class AlphaAssetSpec:
     def public_contract(self) -> dict[str, Any]:
         basis = "direct"
         if self.asset_class is AlphaAssetClass.INDEX and self.proxy_symbol:
-            basis = f"direct daily index / {self.proxy_symbol} intraday proxy"
+            basis = f"{self.proxy_symbol} ETF proxy via TIME_SERIES_DAILY"
         elif self.asset_class is AlphaAssetClass.COMMODITY:
             basis = "official close-only commodity series"
         return {
@@ -43,7 +43,9 @@ class AlphaAssetSpec:
             "name": self.name,
             "asset_class": self.asset_class,
             "provider": "alpha_vantage",
-            "provider_symbol": self.provider_symbol,
+            "provider_symbol": self.proxy_symbol or self.provider_symbol
+            if self.asset_class is AlphaAssetClass.INDEX
+            else self.provider_symbol,
             "currency": self.currency,
             "price_basis": basis,
             "supported_timeframes": [item.value for item in Timeframe],
@@ -63,6 +65,8 @@ ALPHA_ASSETS: tuple[AlphaAssetSpec, ...] = (
     AlphaAssetSpec("WTI", "WTI Crude Oil", AlphaAssetClass.COMMODITY, "WTI"),
     AlphaAssetSpec("BRENT", "Brent Crude Oil", AlphaAssetClass.COMMODITY, "BRENT"),
     AlphaAssetSpec("NATURAL_GAS", "Natural Gas", AlphaAssetClass.COMMODITY, "NATURAL_GAS"),
+    AlphaAssetSpec("COPPER", "Copper", AlphaAssetClass.COMMODITY, "COPPER"),
+    AlphaAssetSpec("WHEAT", "Wheat", AlphaAssetClass.COMMODITY, "WHEAT"),
 )
 
 ALPHA_ASSET_BY_SYMBOL = {asset.symbol: asset for asset in ALPHA_ASSETS}
@@ -107,6 +111,30 @@ class AlphaSeriesResult:
                 "fallback_reason": self.fallback_reason,
             }
         )
+
+
+def quote_from_series(asset: AlphaAssetSpec, result: AlphaSeriesResult) -> dict[str, Any]:
+    """Return a flat quote contract suitable for boards and heatmaps."""
+    latest = result.candles[-1] if result.candles else None
+    previous = result.candles[-2] if len(result.candles) > 1 else None
+    change_percent = (
+        ((latest.close / previous.close) - 1) * 100
+        if latest and previous and previous.close > 0
+        else None
+    )
+    return {
+        "symbol": asset.symbol,
+        "name": asset.name,
+        "asset_class": asset.asset_class,
+        "price": latest.close if latest else None,
+        "change_percent": change_percent,
+        "timestamp": latest.timestamp if latest else None,
+        "volume": latest.volume if latest else None,
+        "direction": "up" if change_percent and change_percent > 0 else "down" if change_percent and change_percent < 0 else "flat",
+        "source_function": result.source_function,
+        "price_basis": result.price_basis,
+        "fetched_at": result.fetched_at,
+    }
 
 
 def _finite_number(value: Any) -> float | None:
@@ -273,31 +301,84 @@ class AlphaVantageClient:
             headers={"User-Agent": "Meridian-GMI/1.0"},
         )
         self._cache: dict[tuple[str, Timeframe], tuple[float, AlphaSeriesResult]] = {}
+        # Keep the last successful provider result beyond its freshness window.
+        # It is used only when the provider is unavailable or quota-limited.
+        self._stale_cache: dict[tuple[str, Timeframe], AlphaSeriesResult] = {}
         self._response_cache: dict[
             tuple[tuple[str, str], ...], tuple[float, Mapping[str, Any]]
         ] = {}
         self._locks: dict[tuple[str, Timeframe], asyncio.Lock] = {}
         self._request_lock = asyncio.Lock()
         self._last_request_started = 0.0
+        self._daily_request_limit = settings.alpha_vantage_daily_request_limit
+        self._daily_request_count = 0
+        self._daily_request_date = datetime.now(timezone.utc).date()
 
     @property
     def configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def daily_requests_remaining(self) -> int:
+        if datetime.now(timezone.utc).date() != self._daily_request_date:
+            return self._daily_request_limit
+        return max(0, self._daily_request_limit - self._daily_request_count)
+
+    def _reset_daily_budget_if_needed(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        if today != self._daily_request_date:
+            self._daily_request_date = today
+            self._daily_request_count = 0
 
     async def close(self) -> None:
         await self._client.aclose()
 
     async def _paced_get(self, params: dict[str, str]) -> httpx.Response:
         async with self._request_lock:
+            self._reset_daily_budget_if_needed()
+            if self._daily_request_count >= self._daily_request_limit:
+                raise AlphaVantageRateLimitError(
+                    f"Alpha Vantage daily free-tier budget exhausted ({self._daily_request_limit} requests)."
+                )
             elapsed = time.monotonic() - self._last_request_started
             remaining = self.min_request_interval_seconds - elapsed
             if remaining > 0:
                 await asyncio.sleep(remaining)
             self._last_request_started = time.monotonic()
+            self._daily_request_count += 1
             return await self._client.get(
                 self.base_url,
                 params={**params, "apikey": self.api_key},
             )
+
+    async def get_board(
+        self,
+        asset_class: AlphaAssetClass | None = None,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Fetch cached daily quotes as flat board/heatmap records.
+
+        The limit is intentionally bounded so one board refresh cannot consume
+        the entire free-tier budget. Individual series are still protected by
+        the same response and result caches as chart requests.
+        """
+        bounded_limit = max(1, min(8, int(limit)))
+        assets = [
+            asset
+            for asset in ALPHA_ASSETS
+            if asset_class is None or asset.asset_class is asset_class
+        ][:bounded_limit]
+        results: list[dict[str, Any]] = []
+        for asset in assets:
+            try:
+                result = await self.get_candles(asset.symbol, Timeframe.D1)
+            except AlphaVantageError:
+                # A single exhausted/unavailable asset must not hide the other
+                # cached daily observations from the board.
+                continue
+            if result.candles:
+                results.append(quote_from_series(asset, result))
+        return results
 
     async def _request(self, params: dict[str, str]) -> Mapping[str, Any]:
         if not self.api_key:
@@ -327,7 +408,17 @@ class AlphaVantageClient:
                 self._response_cache[request_key] = (time.monotonic(), payload)
                 return payload
             lowered = message.casefold()
-            is_rate_limit = any(
+            is_daily_quota = any(
+                marker in lowered
+                for marker in (
+                    "25 requests per day",
+                    "requests per day",
+                    "daily api call limit",
+                    "daily quota",
+                    "daily limit",
+                )
+            )
+            is_rate_limit = is_daily_quota or any(
                 marker in lowered
                 for marker in (
                     "rate limit",
@@ -338,7 +429,7 @@ class AlphaVantageClient:
                 )
             )
             if is_rate_limit:
-                if attempt == 0:
+                if not is_daily_quota and attempt == 0:
                     continue
                 raise AlphaVantageRateLimitError(message)
             if "premium" in lowered or "subscribe" in lowered or "entitlement" in lowered:
@@ -359,14 +450,36 @@ class AlphaVantageClient:
             now = time.monotonic()
             if cached and now - cached[0] < self.cache_ttl_seconds:
                 return cached[1]
-            if normalized == "GMI":
-                result = await self._global_composite(timeframe)
-            else:
-                asset = ALPHA_ASSET_BY_SYMBOL.get(normalized)
-                if asset is None:
-                    raise AlphaVantageError(f"{normalized} is not in the Alpha Vantage asset catalog")
-                result = await self._fetch_asset(asset, timeframe)
+            try:
+                if normalized == "GMI":
+                    result = await self._global_composite(timeframe)
+                else:
+                    asset = ALPHA_ASSET_BY_SYMBOL.get(normalized)
+                    if asset is None:
+                        raise AlphaVantageError(f"{normalized} is not in the Alpha Vantage asset catalog")
+                    result = await self._fetch_asset(asset, timeframe)
+            except AlphaVantageError as exc:
+                stale = self._stale_cache.get(cache_key)
+                if stale is None:
+                    raise
+                result = replace(
+                    stale,
+                    fallback_reason=(
+                        f"Provider unavailable; showing the last successful "
+                        f"{stale.effective_timeframe.value} observation. {exc}"
+                    ),
+                )
+            stale = self._stale_cache.get(cache_key)
+            if not result.candles and stale and stale.candles:
+                result = replace(
+                    stale,
+                    fallback_reason=(
+                        f"Provider returned no usable candles; showing the last "
+                        f"successful {stale.effective_timeframe.value} observation."
+                    ),
+                )
             self._cache[cache_key] = (time.monotonic(), result)
+            self._stale_cache[cache_key] = result
             return result
 
     async def _fetch_asset(self, asset: AlphaAssetSpec, requested: Timeframe) -> AlphaSeriesResult:
@@ -389,31 +502,17 @@ class AlphaVantageClient:
         if requested is not Timeframe.D1 and self.intraday_enabled:
             try:
                 return await self._fetch_intraday(asset, requested)
-            except AlphaVantageEntitlementError:
-                fallback_reason = "Intraday entitlement unavailable; using Alpha Vantage daily data."
+            except (AlphaVantageEntitlementError, AlphaVantageRateLimitError):
+                fallback_reason = "Intraday entitlement unavailable on the current tier; using Alpha Vantage daily data."
         elif requested is not Timeframe.D1:
             fallback_reason = "Intraday requests are disabled; using Alpha Vantage daily data."
 
         if asset.asset_class is AlphaAssetClass.INDEX:
-            try:
-                payload = await self._request(
-                    {
-                        "function": "INDEX_DATA",
-                        "symbol": asset.provider_symbol,
-                        "interval": "daily",
-                        "datatype": "json",
-                    }
-                )
-                candles = parse_alpha_ohlcv(payload, symbol=asset.symbol, timeframe=Timeframe.D1)
-                return self._result(
-                    asset, requested, Timeframe.D1, candles, "INDEX_DATA", "direct index", fallback_reason
-                )
-            except AlphaVantageEntitlementError:
-                fallback_reason = (
-                    (fallback_reason + " " if fallback_reason else "")
-                    + f"Direct index entitlement unavailable; using {asset.proxy_symbol} ETF proxy."
-                )
-                return await self._fetch_equity_daily(asset, requested, fallback_reason)
+            fallback_reason = (
+                (fallback_reason + " " if fallback_reason else "")
+                + f"Using {asset.proxy_symbol} ETF proxy on the Alpha Vantage free tier."
+            )
+            return await self._fetch_equity_daily(asset, requested, fallback_reason)
 
         params = {"outputsize": "compact", "datatype": "json"}
         if asset.asset_class is AlphaAssetClass.FOREX:

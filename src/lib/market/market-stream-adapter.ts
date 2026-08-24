@@ -8,7 +8,7 @@ export type MarketTimeframeInput =
   | "4H"
   | "1D";
 
-export type MarketFeedSource = "websocket" | "rest" | "demo" | "upload";
+export type MarketFeedSource = "websocket" | "rest" | "upload" | "unavailable";
 
 export interface MarketStreamCandle extends OhlcvBar {
   symbol: string;

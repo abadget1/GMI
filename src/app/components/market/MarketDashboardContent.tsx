@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Box } from "@mui/material";
 import CandlestickZoneChart from "./CandlestickZoneChart";
 import MarketControlBar from "./MarketControlBar";
@@ -9,7 +9,6 @@ import SupplyDemandHeatmap from "./SupplyDemandHeatmap";
 import TickerTape from "./TickerTape";
 import WorldActivityMap from "./WorldActivityMap";
 import ZoneRail from "./ZoneRail";
-import { demoAlerts, demoCandles, demoHeatmap, demoIndexAssets, demoZones } from "./demoData";
 import type {
   ActivityRegion,
   Candle,
@@ -61,7 +60,7 @@ export default function MarketDashboardContent({
   currentValue,
   change,
   changePercent,
-  assetOptions = demoIndexAssets,
+  assetOptions = [],
   selectedSymbol,
   symbol = "GMI",
   indexName,
@@ -81,49 +80,8 @@ export default function MarketDashboardContent({
   const [localThreshold, setLocalThreshold] = useState(0.5);
   const activeSymbol = selectedSymbol ?? localSymbol;
   const activeThreshold = alertThreshold ?? localThreshold;
-  const activeAsset = assetOptions.find((asset) => asset.symbol === activeSymbol) ?? assetOptions[0] ?? demoIndexAssets[0];
-  const liveValue = currentValue ?? activeAsset.value;
-
-  const scaledMarketData = useMemo(() => {
-    // A supplied series is authoritative, even when one related API request
-    // is empty or unavailable. Never pair API candles with demo zones.
-    if (candles !== undefined || zones !== undefined) {
-      return { candles: candles ?? [], zones: zones ?? [] };
-    }
-    // A live tick must never rewrite historical candles. Rebase the fixture
-    // once for the selected asset, then update only the in-progress last bar.
-    const scale = activeAsset.value / demoIndexAssets[0].value;
-    const scalePrice = (value: number) => Number((value * scale).toFixed(4));
-    let scaledCandles = candles ?? demoCandles.map((candle) => ({
-      ...candle,
-      open: scalePrice(candle.open),
-      high: scalePrice(candle.high),
-      low: scalePrice(candle.low),
-      close: scalePrice(candle.close),
-    }));
-    if (!candles && scaledCandles.length) {
-      const lastIndex = scaledCandles.length - 1;
-      const last = scaledCandles[lastIndex];
-      scaledCandles = scaledCandles.map((candle, index) =>
-        index === lastIndex
-          ? {
-              ...last,
-              high: Math.max(last.high, liveValue),
-              low: Math.min(last.low, liveValue),
-              close: liveValue,
-            }
-          : candle,
-      );
-    }
-    return {
-      candles: scaledCandles,
-      zones: zones ?? demoZones.map((zone) => ({
-        ...zone,
-        proximal: scalePrice(zone.proximal),
-        distal: scalePrice(zone.distal),
-      })),
-    };
-  }, [activeAsset.value, candles, liveValue, zones]);
+  const activeAsset = assetOptions.find((asset) => asset.symbol === activeSymbol) ?? assetOptions[0];
+  const liveValue = currentValue ?? activeAsset?.value ?? 0;
 
   const handleAssetChange = (nextSymbol: string) => {
     if (selectedSymbol === undefined) setLocalSymbol(nextSymbol);
@@ -165,19 +123,19 @@ export default function MarketDashboardContent({
       >
         <CandlestickZoneChart
           key={`${activeSymbol}:${timeframe ?? "15m"}`}
-          candles={scaledMarketData.candles}
-          zones={scaledMarketData.zones}
+          candles={candles ?? []}
+          zones={zones ?? []}
           currentValue={liveValue}
-          change={change ?? activeAsset.change}
-          changePercent={changePercent ?? activeAsset.changePercent}
+          change={change ?? activeAsset?.change ?? 0}
+          changePercent={changePercent ?? activeAsset?.changePercent ?? 0}
           symbol={activeSymbol}
-          name={indexName ?? activeAsset.name}
+          name={indexName ?? activeAsset?.name ?? activeSymbol}
           timeframe={timeframe}
           timeframes={timeframes}
           onTimeframeChange={handleTimeframeChange}
         />
         <ZoneRail
-          zones={scaledMarketData.zones}
+          zones={zones ?? []}
           currentValue={liveValue}
           symbol={activeSymbol}
           alertThreshold={activeThreshold}
@@ -193,11 +151,11 @@ export default function MarketDashboardContent({
         }}
       >
         <WorldActivityMap regions={regions} />
-        <SupplyDemandHeatmap metrics={heatmap ?? demoHeatmap} />
+        <SupplyDemandHeatmap metrics={heatmap ?? []} />
       </Box>
 
       <MarketOperations
-        alerts={alerts ?? demoAlerts}
+        alerts={alerts ?? []}
         assets={watchlist}
         onCreateAlert={onCreateAlert}
       />

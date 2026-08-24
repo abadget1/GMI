@@ -1,10 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { calculateSupplyDemandScore } from "./scoring";
-import { DEMO_FOCUS_BARS, DEMO_PRESSURE_MARKETS } from "./demo-data";
-import { resampleOhlcv } from "./timeframes";
-import { detectSupplyDemandZones } from "./zones";
+import { useEffect, useState } from "react";
 import {
   adaptCandleResponse,
   adaptMarketSnapshot,
@@ -29,7 +25,7 @@ import {
 } from "./market-stream-adapter";
 import type { MarketTimeframe } from "./types";
 
-export type MarketFeedStatus = "connecting" | "connected" | "simulated";
+export type MarketFeedStatus = "connecting" | "connected" | "unavailable";
 
 export interface UseMarketStreamOptions {
   symbol: string;
@@ -85,18 +81,6 @@ interface ResolvedHookOptions {
   onTimeframeResolved?: (timeframe: MarketTimeframe) => void;
 }
 
-interface DemoBundle {
-  candles: readonly MarketStreamCandle[];
-  zones: readonly MarketStreamZone[];
-  pressure: readonly MarketStreamPressure[];
-  alerts: readonly MarketStreamAlert[];
-}
-
-function precisionFor(value: number): number {
-  if (value < 10) return 4;
-  return 2;
-}
-
 function publicEnvironmentEndpoints(options: UseMarketStreamOptions): MarketEndpointInput {
   const environmentApi =
     process.env.NEXT_PUBLIC_MARKET_API_URL ?? process.env.NEXT_PUBLIC_GMI_API_URL;
@@ -124,9 +108,9 @@ function resolveHookOptions(
         }
       : optionsOrSymbol;
   const endpoints = resolveMarketEndpoints(publicEnvironmentEndpoints(options));
-  const fallbackValue = options.fallbackValue ?? 1_000;
-  if (!Number.isFinite(fallbackValue) || fallbackValue <= 0) {
-    throw new RangeError("fallbackValue must be a finite number greater than zero.");
+  const fallbackValue = options.fallbackValue ?? 0;
+  if (!Number.isFinite(fallbackValue) || fallbackValue < 0) {
+    throw new RangeError("fallbackValue must be a finite number greater than or equal to zero.");
   }
   const fallbackChangePercent = options.fallbackChangePercent ?? 0;
   if (!Number.isFinite(fallbackChangePercent)) {
@@ -147,78 +131,6 @@ function resolveHookOptions(
     preferRestCandles: options.preferRestCandles ?? false,
     onTimeframeResolved: options.onTimeframeResolved,
   };
-}
-
-function createDemoBundle(
-  symbol: string,
-  timeframe: MarketTimeframe,
-  fallbackValue: number,
-  includeTestedZones: boolean,
-  minZoneQuality: number,
-): DemoBundle {
-  const lastDemoClose = DEMO_FOCUS_BARS[DEMO_FOCUS_BARS.length - 1]?.close ?? 1_000;
-  const scale = fallbackValue / lastDemoClose;
-  const scaled = DEMO_FOCUS_BARS.map((bar) => ({
-    ...bar,
-    open: bar.open * scale,
-    high: bar.high * scale,
-    low: bar.low * scale,
-    close: bar.close * scale,
-  }));
-  const resampled = resampleOhlcv(scaled, timeframe);
-  const candles: MarketStreamCandle[] = resampled.map((bar) => ({
-    ...bar,
-    symbol,
-    timeframe,
-  }));
-  const detectedZones: MarketStreamZone[] = detectSupplyDemandZones(candles, {
-    timeframe,
-    minRangeAtrMultiple: 1.15,
-  })
-    .filter((zone) => zone.quality.freshness !== "invalidated")
-    .map((zone) => ({
-      id: zone.id,
-      symbol,
-      timeframe,
-      side: zone.side,
-      lower: zone.lower,
-      upper: zone.upper,
-      proximal: zone.proximal,
-      distal: zone.distal,
-      baseTimestamp: zone.createdAt,
-      impulseStart: candles[zone.impulseStartIndex]?.time ?? zone.createdAt,
-      impulseEnd: candles[zone.impulseEndIndex]?.time ?? zone.createdAt,
-      impulseCandles: zone.impulseEndIndex - zone.impulseStartIndex + 1,
-      qualityScore: zone.quality.score,
-      freshness: zone.quality.freshness as "virgin" | "tested",
-      testCount: zone.quality.testCount,
-      trendAligned: zone.quality.trendAligned,
-      fairValueGap: zone.quality.fairValueGap,
-      breakOfStructure: zone.quality.breakOfStructure,
-      rationale: zone.structuralDescription,
-    }));
-  const zones = filterMarketZones(detectedZones, {
-    includeTestedZones,
-    minZoneQuality,
-  });
-  const pressure: MarketStreamPressure[] = DEMO_PRESSURE_MARKETS.map((market) => {
-    const score = calculateSupplyDemandScore(market.inputs);
-    return {
-      key: market.id,
-      label: market.label,
-      group: market.group,
-      score: score.netPressure,
-      state:
-        score.netPressure >= 20
-          ? "demand"
-          : score.netPressure <= -20
-            ? "supply"
-            : "balanced",
-      confidence: Math.min(1, 0.55 + Math.abs(score.netPressure) / 250),
-      drivers: Object.fromEntries(Object.entries(score.contributions)) as Record<string, number>,
-    };
-  });
-  return { candles, zones, pressure, alerts: [] };
 }
 
 function mergeLiveCandle(
@@ -288,45 +200,34 @@ export function useMarketStream(
     candleLimit,
     includeTestedZones,
     minZoneQuality,
-    simulationIntervalMs,
     restRefreshIntervalMs,
     preferRestCandles,
     onTimeframeResolved,
   } = options;
-  const demo = useMemo(
-    () =>
-      createDemoBundle(
-        symbol,
-        timeframe,
-        fallbackValue,
-        includeTestedZones,
-        minZoneQuality,
-      ),
-    [fallbackValue, includeTestedZones, minZoneQuality, symbol, timeframe],
-  );
   const [state, setState] = useState<MarketFeedState>(() => ({
     symbol,
     timeframe,
     currentValue: fallbackValue,
     changePercent: fallbackChangePercent,
-    status: wsUrl || apiBaseUrl ? "connecting" : "simulated",
-    source: "demo",
-    latencyMs: 84,
+    status: wsUrl || apiBaseUrl ? "connecting" : "unavailable",
+    source: "unavailable",
+    latencyMs: 0,
     sequence: 0,
     updatedAt: null,
     isLoading: Boolean(apiBaseUrl),
     error: null,
-    ...demo,
+    candles: [],
+    zones: [],
+    pressure: [],
+    alerts: [],
   }));
 
   useEffect(() => {
-    let simulationTimer: ReturnType<typeof setInterval> | undefined;
     let restRefreshTimer: ReturnType<typeof setInterval> | undefined;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let socket: WebSocket | undefined;
     const controller = new AbortController();
     let disposed = false;
-    let simulationSequence = 0;
     let reconnectAttempt = 0;
     let lastWireSequence = 0;
     let latestRestRequest = 0;
@@ -340,21 +241,19 @@ export function useMarketStream(
         timeframe,
         currentValue: fallbackValue,
         changePercent: fallbackChangePercent,
-        status: wsUrl || apiBaseUrl ? "connecting" : "simulated",
-        source: "demo",
-        latencyMs: 84,
+        status: wsUrl || apiBaseUrl ? "connecting" : "unavailable",
+        source: "unavailable",
+        latencyMs: 0,
         sequence: 0,
         updatedAt: new Date(),
         isLoading: Boolean(apiBaseUrl),
         error: null,
-        ...demo,
+        candles: [],
+        zones: [],
+        pressure: [],
+        alerts: [],
       });
     });
-
-    function stopSimulation() {
-      if (simulationTimer) clearInterval(simulationTimer);
-      simulationTimer = undefined;
-    }
 
     function observeTickBucket(tickAt: number) {
       const advanced = marketBucketAdvanced(lastObservedTickAt, tickAt, timeframe);
@@ -364,44 +263,6 @@ export function useMarketStream(
       if (advanced && apiBaseUrl) void loadRest(tickAt);
     }
 
-    function startSimulation(reason?: string) {
-      if (simulationTimer || disposed) return;
-      setState((current) => ({
-        ...current,
-        status: "simulated",
-        source: "demo",
-        isLoading: false,
-        error: reason ?? current.error,
-      }));
-      simulationTimer = setInterval(() => {
-        simulationSequence += 1;
-        const tickAt = Date.now();
-        const wave = Math.sin(simulationSequence * 0.83 + symbol.length) * 0.00012;
-        const microMove = wave + Math.cos(simulationSequence * 0.31) * 0.000045;
-        setState((current) => {
-          const nextValue = Number(
-            (current.currentValue * (1 + microMove)).toFixed(
-              precisionFor(current.currentValue),
-            ),
-          );
-          return {
-            ...current,
-            currentValue: nextValue,
-            changePercent: Number((current.changePercent + microMove * 100).toFixed(3)),
-            status: "simulated",
-            source: "demo",
-            sequence: current.sequence + 1,
-            updatedAt: new Date(tickAt),
-            candles: mergeMarketQuoteIntoCandles(
-              current.candles,
-              { symbol, timeframe, price: nextValue, generatedAt: tickAt },
-              candleLimit,
-            ),
-          };
-        });
-        observeTickBucket(tickAt);
-      }, simulationIntervalMs);
-    }
 
     async function loadRest(observedAt?: number): Promise<boolean> {
       if (!apiBaseUrl) return false;
@@ -450,8 +311,18 @@ export function useMarketStream(
         .map((reason) => (reason instanceof Error ? reason.message : String(reason)));
 
       if (successes === 0) {
-        if (!controller.signal.aborted && !wsUrl) {
-          startSimulation("REST market feed unavailable; using demo data.");
+        if (!controller.signal.aborted) {
+          setState((current) => ({
+            ...current,
+            status: "unavailable",
+            source: "unavailable",
+            isLoading: false,
+            error: failures.join("; ") || "Market API returned no usable data.",
+            candles: [],
+            zones: [],
+            pressure: [],
+            alerts: [],
+          }));
         }
         return false;
       }
@@ -489,9 +360,9 @@ export function useMarketStream(
             ? selected?.changePercent ?? restChangePercent
             : restChangePercent;
         let nextCandles: readonly MarketStreamCandle[] = candles ?? current.candles;
-        if (snapshotIsFresh && selected?.liveCandle) {
+        if (!preferRestCandles && snapshotIsFresh && selected?.liveCandle) {
           nextCandles = mergeLiveCandle(nextCandles, selected.liveCandle, candleLimit);
-        } else {
+        } else if (!preferRestCandles) {
           const quotePrice = selectedValue ?? current.currentValue;
           const quoteTime = snapshotTime ?? lastObservedTickAt;
           if (quoteTime !== undefined) {
@@ -533,7 +404,13 @@ export function useMarketStream(
 
     function scheduleReconnect(reason: string) {
       if (!wsUrl || disposed || reconnectTimer) return;
-      startSimulation(reason);
+      setState((current) => ({
+        ...current,
+        status: "connecting",
+        source: "unavailable",
+        isLoading: true,
+        error: reason,
+      }));
       const delay = marketReconnectDelayMs(reconnectAttempt);
       reconnectAttempt = Math.min(reconnectAttempt + 1, 30);
       reconnectTimer = setTimeout(() => {
@@ -549,7 +426,6 @@ export function useMarketStream(
         socket = candidate;
         candidate.addEventListener("open", () => {
           if (!disposed) {
-            stopSimulation();
             lastWireSequence = 0;
             setState((current) => ({
               ...current,
@@ -624,23 +500,22 @@ export function useMarketStream(
         });
         candidate.addEventListener("close", () => {
           if (socket === candidate) socket = undefined;
-          scheduleReconnect("WebSocket disconnected; using deterministic fallback ticks.");
+          scheduleReconnect("WebSocket disconnected; retrying live API.");
         });
         candidate.addEventListener("error", () => candidate.close());
       } catch {
-        scheduleReconnect("WebSocket unavailable; using deterministic fallback ticks.");
+        scheduleReconnect("WebSocket unavailable; retrying live API.");
       }
     }
 
     if (wsUrl) connectWebSocket();
     else if (apiBaseUrl) {
       restRefreshTimer = setInterval(() => void loadRest(), restRefreshIntervalMs);
-    } else startSimulation();
+    }
 
     return () => {
       disposed = true;
       controller.abort();
-      stopSimulation();
       if (restRefreshTimer) clearInterval(restRefreshTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
@@ -648,7 +523,6 @@ export function useMarketStream(
   }, [
     apiBaseUrl,
     candleLimit,
-    demo,
     fallbackChangePercent,
     fallbackValue,
     includeTestedZones,
@@ -656,7 +530,6 @@ export function useMarketStream(
     onTimeframeResolved,
     preferRestCandles,
     restRefreshIntervalMs,
-    simulationIntervalMs,
     symbol,
     timeframe,
     wsUrl,

@@ -3,7 +3,6 @@
 import TrendingDownRounded from "@mui/icons-material/TrendingDownRounded";
 import TrendingUpRounded from "@mui/icons-material/TrendingUpRounded";
 import { Box, Chip, Stack, Typography } from "@mui/material";
-import { demoTickers } from "./demoData";
 import { formatMarketValue, marketColors, StatusDot } from "./MarketPanel";
 import type { MarketTicker } from "./types";
 
@@ -14,9 +13,9 @@ export interface TickerTapeProps {
 }
 
 export default function TickerTape({
-  items = demoTickers,
+  items = [],
   marketStatus = "live",
-  asOf = "Streaming · normalized",
+  asOf = "Waiting for API data",
 }: TickerTapeProps) {
   const statusLabel =
     marketStatus === "historical"

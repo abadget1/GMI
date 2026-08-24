@@ -4,7 +4,6 @@ import ArrowDownwardRounded from "@mui/icons-material/ArrowDownwardRounded";
 import ArrowUpwardRounded from "@mui/icons-material/ArrowUpwardRounded";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import { Box, Chip, Stack, Typography } from "@mui/material";
-import { demoZones } from "./demoData";
 import { formatMarketValue, marketColors, MarketPanel } from "./MarketPanel";
 import type { PriceZone } from "./types";
 
@@ -81,8 +80,8 @@ function ZoneCard({ zone, currentValue }: { zone: PriceZone; currentValue: numbe
 }
 
 export default function ZoneRail({
-  zones = demoZones,
-  currentValue = 1092.79,
+  zones = [],
+  currentValue = 0,
   symbol = "GMI",
   alertThreshold = 0.5,
 }: ZoneRailProps) {
@@ -129,4 +128,3 @@ export default function ZoneRail({
     </MarketPanel>
   );
 }
-

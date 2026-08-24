@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import httpx
 
-from app.alpha_vantage import AlphaVantageClient
+from app.alpha_vantage import AlphaAssetClass, AlphaVantageClient, AlphaVantageRateLimitError
 from app.config import Settings
 from app.domain import Timeframe
 
@@ -15,6 +15,7 @@ def settings() -> Settings:
         alpha_vantage_cache_ttl_seconds=60,
         alpha_vantage_timeout_seconds=2,
         alpha_vantage_min_request_interval_seconds=0,
+        alpha_vantage_intraday_enabled=True,
         redis_url=None,
         simulation_interval_seconds=60,
         history_limit=40,
@@ -230,6 +231,173 @@ class AlphaVantageClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.price_basis, "official close-only commodity series")
         self.assertEqual(result.candles[-1].open, result.candles[-1].close)
         self.assertEqual(result.candles[-1].close, 64.72)
+
+    async def test_fetches_crypto_from_digital_currency_daily(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.params["function"], "DIGITAL_CURRENCY_DAILY")
+            self.assertEqual(request.url.params["symbol"], "BTC")
+            self.assertEqual(request.url.params["market"], "USD")
+            return httpx.Response(
+                200,
+                json={
+                    "Time Series (Digital Currency Daily)": {
+                        "2026-08-21": {
+                            "1. open": "117000.00",
+                            "2a. high (USD)": "118500.00",
+                            "3a. low (USD)": "116000.00",
+                            "4a. close (USD)": "118000.00",
+                            "5. volume": "2500",
+                        },
+                        "2026-08-20": {
+                            "1. open": "116000.00",
+                            "2a. high (USD)": "117500.00",
+                            "3a. low (USD)": "115000.00",
+                            "4a. close (USD)": "117000.00",
+                            "5. volume": "2300",
+                        },
+                    }
+                },
+            )
+
+        client = AlphaVantageClient(settings(), transport=httpx.MockTransport(handler))
+        try:
+            result = await client.get_candles("BTCUSD", Timeframe.D1)
+        finally:
+            await client.close()
+
+        self.assertEqual(result.source_function, "DIGITAL_CURRENCY_DAILY")
+        self.assertEqual([candle.close for candle in result.candles], [117000.0, 118000.0])
+
+    async def test_uses_time_series_daily_for_free_tier_index_proxy(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.params["function"], "TIME_SERIES_DAILY")
+            self.assertEqual(request.url.params["symbol"], "SPY")
+            return httpx.Response(
+                200,
+                json={
+                    "Time Series (Daily)": {
+                        "2026-08-21": {
+                            "1. open": "645.0",
+                            "2. high": "647.0",
+                            "3. low": "644.5",
+                            "4. close": "646.5",
+                            "5. volume": "1000000",
+                        }
+                    }
+                },
+            )
+
+        client = AlphaVantageClient(
+            replace(settings(), alpha_vantage_intraday_enabled=False),
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            result = await client.get_candles("SPX", Timeframe.H1)
+        finally:
+            await client.close()
+
+        self.assertEqual(result.source_function, "TIME_SERIES_DAILY")
+        self.assertEqual(result.price_basis, "SPY ETF proxy")
+        self.assertIn("free tier", result.fallback_reason or "")
+
+    async def test_builds_flat_cached_board_records(self) -> None:
+        requests = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal requests
+            requests += 1
+            symbol = request.url.params["symbol"]
+            return httpx.Response(
+                200,
+                json={
+                    "Time Series (Digital Currency Daily)": {
+                        "2026-08-21": {
+                            "1. open": "100.0",
+                            "2a. high (USD)": "102.0",
+                            "3a. low (USD)": "99.0",
+                            "4a. close (USD)": "101.0",
+                            "5. volume": "10",
+                        },
+                        "2026-08-20": {
+                            "1. open": "99.0",
+                            "2a. high (USD)": "100.0",
+                            "3a. low (USD)": "98.0",
+                            "4a. close (USD)": "100.0",
+                            "5. volume": "8",
+                        },
+                    },
+                    "symbol": symbol,
+                },
+            )
+
+        client = AlphaVantageClient(settings(), transport=httpx.MockTransport(handler))
+        try:
+            first = await client.get_board(AlphaAssetClass.CRYPTO, limit=2)
+            second = await client.get_board(AlphaAssetClass.CRYPTO, limit=2)
+        finally:
+            await client.close()
+
+        self.assertEqual(requests, 2)
+        self.assertEqual([item["symbol"] for item in first], ["BTCUSD", "ETHUSD"])
+        self.assertEqual(first, second)
+        self.assertEqual(first[0]["price"], 101.0)
+        self.assertEqual(first[0]["direction"], "up")
+
+    async def test_enforces_configured_daily_request_budget(self) -> None:
+        requests = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal requests
+            requests += 1
+            return httpx.Response(
+                200,
+                json={
+                    "Time Series FX (Daily)": {
+                        "2026-08-21": {
+                            "1. open": "1.10",
+                            "2. high": "1.11",
+                            "3. low": "1.09",
+                            "4. close": "1.105",
+                        }
+                    }
+                },
+            )
+
+        client = AlphaVantageClient(
+            replace(settings(), alpha_vantage_daily_request_limit=1),
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            await client.get_candles("EURUSD", Timeframe.D1)
+            with self.assertRaises(AlphaVantageRateLimitError):
+                await client.get_candles("GBPUSD", Timeframe.D1)
+        finally:
+            await client.close()
+
+        self.assertEqual(requests, 1)
+        self.assertEqual(client.daily_requests_remaining, 0)
+
+    async def test_maps_alpha_daily_quota_message_without_retrying(self) -> None:
+        requests = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal requests
+            requests += 1
+            return httpx.Response(
+                200,
+                json={
+                    "Information": "Thank you for using Alpha Vantage! Our standard API call frequency is 25 requests per day."
+                },
+            )
+
+        client = AlphaVantageClient(settings(), transport=httpx.MockTransport(handler))
+        try:
+            with self.assertRaises(AlphaVantageRateLimitError):
+                await client.get_candles("EURUSD", Timeframe.D1)
+        finally:
+            await client.close()
+
+        self.assertEqual(requests, 1)
 
 
 if __name__ == "__main__":

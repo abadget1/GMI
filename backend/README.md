@@ -28,7 +28,8 @@ docker compose up --build
 
 - `GET /api/v1/assets` — components, weights, methodology, and timeframes.
 - `GET /api/v1/snapshot` — one dashboard-ready market payload.
-- `GET /api/v1/index/candles?symbol=GMI&timeframe=15m` — OHLC history.
+- `GET /api/v1/index/candles?symbol=GMI&timeframe=15m` — normalized OHLC history for indices, ETF proxies, crypto, commodities, and imports.
+- `GET /api/v1/alpha/board?asset_class=crypto&limit=8` — cached flat Alpha Vantage quotes for price boards and heatmaps.
 - `GET /api/v1/pressure?group=Energy` — supply/demand pressure scores.
 - `GET /api/v1/zones/GMI?timeframe=15m&min_quality=70` — structural zones.
 - `POST /api/v1/alerts` — register timeframe-specific approach, cross, or inside-zone alerts.
@@ -38,9 +39,18 @@ docker compose up --build
 `GET /api/v1/index/candles` and `GET /api/v1/zones/{symbol}` resolve data in
 this order: user-uploaded history, Alpha Vantage, then the deterministic core
 fallback. Responses include `requested_timeframe`, effective `timeframe`, and
-source metadata. Premium intraday entitlement failures automatically fall back
-to Alpha Vantage daily endpoints; direct indices use SPY/QQQ/DIA ETF proxies
-when the premium `INDEX_DATA` endpoint is unavailable.
+source metadata. The Alpha Vantage adapter uses `DIGITAL_CURRENCY_DAILY` for
+crypto, the documented daily commodity functions (`WTI`, `BRENT`,
+`NATURAL_GAS`, `COPPER`, and `WHEAT`), and `TIME_SERIES_DAILY` over SPY/QQQ/DIA
+ETF proxies for free-tier index history. Intraday requests are opt-in and fall
+back to daily data when unavailable.
+
+The default Alpha Vantage cache TTL is six hours and the client enforces a
+maximum of 25 actual provider requests per UTC day. Cached chart reloads and
+board requests do not consume quota. Configure
+`GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS`, `GMI_ALPHA_VANTAGE_DAILY_REQUEST_LIMIT`,
+and `GMI_ALPHA_VANTAGE_INTRADAY_ENABLED` for local development; tests can use
+the client's `httpx.MockTransport` without contacting Alpha Vantage.
 
 Snapshot zone fields are deliberately dual-published during the browser
 contract transition:

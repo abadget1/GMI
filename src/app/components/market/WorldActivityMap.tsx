@@ -3,7 +3,6 @@
 import { useId, useMemo, useState } from "react";
 import LanguageRounded from "@mui/icons-material/LanguageRounded";
 import { Box, Chip, Stack, Typography } from "@mui/material";
-import { demoRegions } from "./demoData";
 import { marketColors, MarketPanel, StatusDot } from "./MarketPanel";
 import type { ActivityRegion, MarketSessionStatus } from "./types";
 
@@ -19,7 +18,7 @@ const statusColor: Record<MarketSessionStatus, string> = {
 };
 
 export default function WorldActivityMap({
-  regions = demoRegions,
+  regions = [],
   title = "Global market activity",
 }: WorldActivityMapProps) {
   const [selectedId, setSelectedId] = useState(regions[0]?.id ?? "");
