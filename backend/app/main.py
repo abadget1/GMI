@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import math
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -65,51 +67,13 @@ def _known_symbols(request: Request) -> set[str]:
     return VALID_SYMBOLS | set(ALPHA_ASSET_BY_SYMBOL) | set(imported)
 
 
-DEMO_ASSET_PRICES = {
-    "SPX": 6500.0,
-    "NDX": 22000.0,
-    "DJI": 44000.0,
-    "EURUSD": 1.08,
-    "GBPUSD": 1.27,
-    "USDJPY": 149.0,
-    "BTCUSD": 65_000.0,
-    "ETHUSD": 3_500.0,
-    "SOLUSD": 160.0,
-    "WTI": 74.0,
-    "BRENT": 78.0,
-    "NATURAL_GAS": 2.2,
-    "COPPER": 4.1,
-    "WHEAT": 590.0,
-}
-
-
-def demo_board(asset_class: str | None, limit: int) -> list[dict]:
-    values: list[dict] = []
-    for asset in ALPHA_ASSETS:
-        if asset_class and asset.asset_class.value != asset_class:
-            continue
-        price = DEMO_ASSET_PRICES.get(asset.symbol, 100.0)
-        change = ((sum(ord(char) for char in asset.symbol) % 9) - 4) / 10
-        values.append(
-            {
-                "symbol": asset.symbol,
-                "name": asset.name,
-                "asset_class": asset.asset_class,
-                "price": price,
-                "change_percent": change,
-                "provider": "demo",
-            }
-        )
-    return values[: max(1, min(8, int(limit)))]
-
-
 async def _market_history(
     request: Request,
     symbol: str,
     timeframe: Timeframe,
     limit: int,
 ) -> tuple[list, Timeframe, dict | None]:
-    """Resolve uploaded, Alpha Vantage, then simulator history in that order."""
+    """Resolve uploaded, Twelve Data, Alpha Vantage, then local history."""
 
     imported = getattr(request.app.state, "historical_assets", {})
     alpha: AlphaVantageClient = request.app.state.alpha_vantage
@@ -155,6 +119,66 @@ async def _market_history(
     }
 
 
+def _live_pressure(items: list[dict]) -> list[dict]:
+    values = []
+    for item in items:
+        change = item.get("change_percent")
+        if not isinstance(change, (int, float)):
+            continue
+        score = max(-100.0, min(100.0, float(change) * 20.0))
+        values.append(
+            {
+                "key": f"twelve-{item.get('symbol', 'asset')}",
+                "label": item.get("name") or item.get("symbol"),
+                "group": item.get("asset_class") or "market",
+                "score": round(score, 4),
+                "state": "demand" if score > 10 else "supply" if score < -10 else "balanced",
+                "confidence": 60.0,
+                "drivers": {"price_change_pct": round(float(change), 4)},
+            }
+        )
+    return values
+
+
+async def _live_snapshot(request: Request) -> dict:
+    twelve: TwelveDataClient = request.app.state.twelve_data
+    if not twelve.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="Twelve Data is not configured; set GMI_TWELVE_DATA_API_KEY.",
+        )
+    try:
+        try:
+            result = await twelve.get_candles("GMI", Timeframe.M15, 200)
+        except TwelveDataError:
+            result = await twelve.get_candles("GMI", Timeframe.D1, 200)
+        board = await twelve.get_board(limit=8)
+    except TwelveDataRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except TwelveDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    candles = list(result.candles)
+    latest = candles[-1]
+    previous = candles[-2] if len(candles) > 1 else None
+    change = ((latest.close / previous.close) - 1) * 100 if previous else 0.0
+    zones = tuple(
+        detect_zones(completed_candles(candles, as_of=datetime.now(timezone.utc)))[:SNAPSHOT_ZONE_LIMIT]
+    )
+    return {
+        "sequence": int(latest.timestamp.timestamp()),
+        "generated_at": latest.timestamp,
+        "prices": {"GMI": latest.close},
+        "changes_pct": {"GMI": round(change, 4)},
+        "composite": {result.effective_timeframe.value: latest},
+        "pressure": _live_pressure(board),
+        "zones": {"GMI": zones},
+        "alerts": [],
+        "zones_by_timeframe": {result.effective_timeframe.value: {"GMI": zones}},
+        "source": "twelve_data",
+    }
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -175,16 +199,19 @@ def create_app(
         app.state.alpha_vantage = alpha
         app.state.twelve_data = twelve
         app.state.historical_assets = {}
-        await engine.initialize(periods=min(120, max(20, settings.history_limit - 1)))
-        ingestion_task = asyncio.create_task(engine.run(), name="market-ingestion")
+        ingestion_task = None
+        if not twelve.configured:
+            await engine.initialize(periods=min(120, max(20, settings.history_limit - 1)))
+            ingestion_task = asyncio.create_task(engine.run(), name="market-ingestion")
         try:
             yield
         finally:
-            await engine.stop()
-            try:
-                await ingestion_task
-            except asyncio.CancelledError:
-                pass
+            if ingestion_task is not None:
+                await engine.stop()
+                try:
+                    await ingestion_task
+                except asyncio.CancelledError:
+                    pass
             await alpha.close()
             await twelve.close()
             await store.close()
@@ -217,6 +244,13 @@ def create_app(
 
     @app.get("/health", tags=["system"])
     async def health(request: Request) -> dict:
+        if request.app.state.twelve_data.configured:
+            return {
+                "status": "ok",
+                "version": __version__,
+                "provider": "twelve_data",
+                "server_time": datetime.now(timezone.utc),
+            }
         snapshot = await _store(request).latest_snapshot()
         return {
             "status": "ok" if snapshot else "starting",
@@ -352,6 +386,8 @@ def create_app(
 
     @app.get(f"{settings.api_prefix}/snapshot", tags=["markets"])
     async def snapshot(request: Request) -> dict:
+        if request.app.state.twelve_data.configured:
+            return await _live_snapshot(request)
         latest = await _store(request).latest_snapshot()
         if latest is None:
             raise HTTPException(status_code=503, detail="market engine is starting")
@@ -420,12 +456,10 @@ def create_app(
                 "provider": "twelve_data",
             }
         if not alpha.configured:
-            items = demo_board(asset_class, limit)
-            return {
-                "count": len(items),
-                "items": primitive(items),
-                "provider": "demo",
-            }
+            raise HTTPException(
+                status_code=503,
+                detail="No market data provider is configured; set GMI_TWELVE_DATA_API_KEY or GMI_ALPHA_VANTAGE_API_KEY.",
+            )
         normalized_class: AlphaAssetClass | None = None
         if asset_class:
             try:
@@ -540,6 +574,53 @@ def create_app(
     @app.websocket("/ws/market")
     async def market_websocket(websocket: WebSocket) -> None:
         await websocket.accept()
+        if websocket.app.state.twelve_data.configured:
+            twelve: TwelveDataClient = websocket.app.state.twelve_data
+            reverse_symbols = {value: key for key, value in TWELVE_SYMBOLS.items()}
+            try:
+                upstream = await twelve.open_quote_stream()
+                try:
+                    async for raw in upstream:
+                        if isinstance(raw, bytes):
+                            raw = raw.decode("utf-8", errors="ignore")
+                        try:
+                            event = json.loads(raw)
+                        except (TypeError, json.JSONDecodeError):
+                            continue
+                        if not isinstance(event, dict):
+                            continue
+                        provider_symbol = str(event.get("symbol", "")).upper()
+                        symbol = reverse_symbols.get(provider_symbol)
+                        price = event.get("price", event.get("close"))
+                        try:
+                            price = float(price)
+                        except (TypeError, ValueError):
+                            continue
+                        if not symbol or not math.isfinite(price) or price <= 0:
+                            continue
+                        timestamp = event.get("timestamp")
+                        try:
+                            generated_at = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+                        except (TypeError, ValueError, OSError):
+                            generated_at = datetime.now(timezone.utc)
+                        payload = {
+                            "sequence": int(generated_at.timestamp() * 1000),
+                            "generated_at": generated_at,
+                            "prices": {symbol: price},
+                            "changes_pct": {},
+                            "composite": {},
+                            "pressure": [],
+                            "zones": {},
+                            "alerts": [],
+                            "zones_by_timeframe": {},
+                            "source": "twelve_data_websocket",
+                        }
+                        await websocket.send_json({"type": "market.snapshot", "data": payload})
+                finally:
+                    await upstream.close()
+            except (WebSocketDisconnect, RuntimeError, HTTPException, TwelveDataError):
+                logger.info("live market websocket disconnected")
+            return
         store: InMemoryMarketStore = websocket.app.state.store
         queue = await store.subscribe()
         try:

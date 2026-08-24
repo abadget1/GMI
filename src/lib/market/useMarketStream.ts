@@ -411,6 +411,12 @@ export function useMarketStream(
 
     function scheduleReconnect(reason: string) {
       if (!wsUrl || disposed || reconnectTimer) return;
+      if (apiBaseUrl && !restRefreshTimer) {
+        // Keep the chart current while a deployment or provider websocket is
+        // unavailable. This is also the expected path on Vercel Functions,
+        // which are request-based rather than persistent socket servers.
+        restRefreshTimer = setInterval(() => void loadRest(), restRefreshIntervalMs);
+      }
       setState((current) => ({
         ...current,
         status: "connecting",

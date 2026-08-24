@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -134,6 +135,29 @@ class TwelveDataClient:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def open_quote_stream(self):
+        """Open Twelve Data's upstream quote stream for the backend WS bridge."""
+        if not self.api_key:
+            raise TwelveDataError("Twelve Data is not configured")
+        try:
+            import websockets
+        except ImportError as exc:
+            raise TwelveDataError("WebSocket support is not installed") from exc
+        connection = await websockets.connect(
+            f"wss://ws.twelvedata.com/v1/quotes/price?apikey={self.api_key}",
+            ping_interval=10,
+            ping_timeout=10,
+        )
+        await connection.send(
+            json.dumps(
+                {
+                    "action": "subscribe",
+                    "params": {"symbols": ",".join(TWELVE_SYMBOLS.values())},
+                }
+            )
+        )
+        return connection
 
     async def _get(self, endpoint: str, params: Mapping[str, str]) -> Mapping[str, Any]:
         if not self.api_key:
