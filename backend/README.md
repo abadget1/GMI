@@ -3,8 +3,8 @@
 FastAPI backend for the real-time Global Market Index dashboard. It ships with
 a deterministic synthetic feed so the full UI can run without vendor keys. The
 `SyntheticMarketFeed` remains the zero-credential fallback. Setting
-`GMI_ALPHA_VANTAGE_API_KEY` enables the built-in quota-aware Alpha Vantage
-adapter for indices, forex, commodities, crypto, and the normalized GMI.
+`GMI_MASSIVE_API_KEY` enables the built-in quota-aware Massive adapter for
+U.S. futures and the normalized ES/NQ-based GMI.
 
 ## Run locally
 
@@ -28,8 +28,8 @@ docker compose up --build
 
 - `GET /api/v1/assets` — components, weights, methodology, and timeframes.
 - `GET /api/v1/snapshot` — one dashboard-ready market payload.
-- `GET /api/v1/index/candles?symbol=GMI&timeframe=15m` — normalized OHLC history for indices, ETF proxies, crypto, commodities, and imports.
-- `GET /api/v1/alpha/board?asset_class=crypto&limit=8` — cached flat Alpha Vantage quotes for price boards and heatmaps.
+- `GET /api/v1/index/candles?symbol=GMI&timeframe=15m` — normalized Massive futures OHLCV or imported history.
+- `GET /api/v1/massive/board?asset_class=commodity&limit=8` — cached Massive futures quotes for price boards and heatmaps.
 - `GET /api/v1/pressure?group=Energy` — supply/demand pressure scores.
 - `GET /api/v1/zones/GMI?timeframe=15m&min_quality=70` — structural zones.
 - `POST /api/v1/alerts` — register timeframe-specific approach, cross, or inside-zone alerts.
@@ -37,20 +37,18 @@ docker compose up --build
 - `WS /ws/market` — bounded, live `market.snapshot` messages.
 
 `GET /api/v1/index/candles` and `GET /api/v1/zones/{symbol}` resolve data in
-this order: user-uploaded history, Alpha Vantage, then the deterministic core
+this order: user-uploaded history, Massive, then the deterministic core
 fallback. Responses include `requested_timeframe`, effective `timeframe`, and
-source metadata. The Alpha Vantage adapter uses `DIGITAL_CURRENCY_DAILY` for
-crypto, the documented daily commodity functions (`WTI`, `BRENT`,
-`NATURAL_GAS`, `COPPER`, and `WHEAT`), and `TIME_SERIES_DAILY` over SPY/QQQ/DIA
-ETF proxies for free-tier index history. Intraday requests are opt-in and fall
-back to daily data when unavailable.
+source metadata. The Massive adapter discovers each root's nearest active dated
+contract, retrieves futures aggregate bars, and converts nanosecond provider
+timestamps to UTC. The GMI series combines aligned, normalized ES and NQ bars.
 
-The default Alpha Vantage cache TTL is six hours and the client enforces a
-maximum of 25 actual provider requests per UTC day. Cached chart reloads and
-board requests do not consume quota. Configure
-`GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS`, `GMI_ALPHA_VANTAGE_DAILY_REQUEST_LIMIT`,
-and `GMI_ALPHA_VANTAGE_INTRADAY_ENABLED` for local development; tests can use
-the client's `httpx.MockTransport` without contacting Alpha Vantage.
+The default Massive request interval is 12.2 seconds, suitable for a
+five-request-per-minute key. Contract identities are cached for six hours and
+bars for one minute. Configure `GMI_MASSIVE_MIN_REQUEST_INTERVAL_SECONDS`,
+`GMI_MASSIVE_CONTRACT_CACHE_TTL_SECONDS`, and
+`GMI_MASSIVE_CACHE_TTL_SECONDS` for the subscribed plan; tests use
+`httpx.MockTransport` without contacting Massive.
 
 Snapshot zone fields are deliberately dual-published during the browser
 contract transition:

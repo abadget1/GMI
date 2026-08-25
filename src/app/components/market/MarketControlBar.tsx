@@ -9,6 +9,7 @@ import VerifiedRounded from "@mui/icons-material/VerifiedRounded";
 import { Box, Button, Chip, Drawer, FormControl, IconButton, MenuItem, Select, Slider, Stack, Typography } from "@mui/material";
 import { marketColors, StatusDot } from "./MarketPanel";
 import type { IndexAssetOption } from "./types";
+import { formatMarketSymbolForDisplay } from "@/lib/market/market-stream-adapter";
 
 export interface MarketControlBarProps {
   assets?: IndexAssetOption[];
@@ -47,7 +48,7 @@ function AssetSelector({ assets, selectedSymbol, onAssetChange, fullWidth = fals
         >
           {assets.map((asset) => (
             <MenuItem key={asset.symbol} value={asset.symbol} sx={{ fontSize: "0.7rem" }}>
-              {asset.symbol} — {asset.name}
+              {formatMarketSymbolForDisplay(asset.symbol)} — {asset.name}
             </MenuItem>
           ))}
         </Select>
@@ -90,7 +91,7 @@ function AssetSelector({ assets, selectedSymbol, onAssetChange, fullWidth = fals
               "&:hover": { bgcolor: active ? marketColors.cyanSoft : "rgba(255,255,255,0.04)" },
             }}
           >
-            {asset.symbol}
+            {formatMarketSymbolForDisplay(asset.symbol)}
           </Button>
         );
       })}
@@ -147,8 +148,12 @@ export default function MarketControlBar({
 }: MarketControlBarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const selected = assets.find((asset) => asset.symbol === selectedSymbol) ?? assets[0];
-  const selectedDetail = selected?.dataSource === "alpha_vantage"
-    ? `${selected.assetClass ?? "market"} · ${selected.priceBasis ?? "provider OHLC"}`
+  const selectedDetail = selected?.dataSource === "massive"
+    ? `${selected.assetClass ?? "market"} · ${selected.priceBasis ?? "Massive futures OHLCV"}`
+    : selected?.dataSource === "twelve_data"
+      ? `${selected.assetClass ?? "market"} · ${selected.priceBasis ?? "Twelve Data OHLCV"}`
+    : selected?.dataSource === "alpha_vantage"
+      ? `${selected.assetClass ?? "market"} · ${selected.priceBasis ?? "Alpha Vantage OHLCV"}`
     : selected?.dataSource === "historical_import"
       ? `Imported OHLCV · ${selected.supportedTimeframes?.map((item) => item.toUpperCase()).join(", ") || "custom interval"}`
       : `${selected?.componentCount.toLocaleString() ?? "—"} components · synchronized OHLC`;

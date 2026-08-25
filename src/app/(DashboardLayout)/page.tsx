@@ -64,6 +64,7 @@ import {
   parseClientHistoricalImport,
 } from "@/lib/market/client-historical-import";
 import {
+  DEFAULT_MARKET_API_URL,
   resolveMarketEndpoints,
   type MarketStreamCandle,
   type MarketStreamZone,
@@ -125,7 +126,12 @@ function alphaBoardMetric(item: AlphaBoardItem): HeatmapMetric | null {
 
 function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption {
   const latestClose = asset.latest_close;
-  const isLiveProvider = asset.provider === "alpha_vantage" || asset.provider === "twelve_data";
+  const isLiveProvider = asset.provider === "massive" || asset.provider === "twelve_data" || asset.provider === "alpha_vantage";
+  const providerLabel = asset.provider === "massive"
+    ? "Massive"
+    : asset.provider === "twelve_data"
+      ? "Twelve Data"
+      : "Alpha Vantage";
   const assetClass = ["index", "forex", "commodity", "crypto", "custom"].includes(asset.asset_class ?? "")
     ? asset.asset_class as IndexAssetOption["assetClass"]
     : "custom";
@@ -136,11 +142,17 @@ function historicalAssetOption(asset: HistoricalAssetResponse): IndexAssetOption
     change: 0,
     changePercent: 0,
     method: isLiveProvider
-      ? `${asset.provider === "twelve_data" ? "Twelve Data" : "Alpha Vantage"} · ${assetClass}`
+      ? `${providerLabel} · ${assetClass}`
       : `Historical import${asset.asset_class ? ` · ${asset.asset_class}` : ""}`,
     componentCount: 0,
     assetClass,
-    dataSource: isLiveProvider ? "alpha_vantage" : "historical_import",
+    dataSource: asset.provider === "massive"
+      ? "massive"
+      : asset.provider === "twelve_data"
+        ? "twelve_data"
+        : asset.provider === "alpha_vantage"
+          ? "alpha_vantage"
+          : "historical_import",
     priceBasis: asset.price_basis,
     supportedTimeframes: asset.timeframes ?? asset.supported_timeframes,
   };
@@ -517,9 +529,9 @@ export default function Dashboard() {
       method: "Waiting for API data",
       componentCount: 0,
       assetClass: "custom" as const,
-      dataSource: "alpha_vantage" as const,
+      dataSource: "massive" as const,
     };
-  const isRestOnlyAsset = selectedAsset.dataSource === "alpha_vantage" || selectedAsset.dataSource === "historical_import";
+  const isRestOnlyAsset = selectedAsset.dataSource === "massive" || selectedAsset.dataSource === "alpha_vantage" || selectedAsset.dataSource === "historical_import";
   const handleResolvedTimeframe = useCallback((timeframe: ChartTimeframe) => {
     setSelectedTimeframe((current) => current === timeframe ? current : timeframe);
   }, []);
@@ -589,7 +601,10 @@ export default function Dashboard() {
   const marketEndpoints = useMemo(
     () =>
       resolveMarketEndpoints({
-        apiUrl: process.env.NEXT_PUBLIC_MARKET_API_URL ?? process.env.NEXT_PUBLIC_GMI_API_URL,
+        apiUrl:
+          process.env.NEXT_PUBLIC_MARKET_API_URL ??
+          process.env.NEXT_PUBLIC_GMI_API_URL ??
+          DEFAULT_MARKET_API_URL,
         wsUrl:
           (process.env.NEXT_PUBLIC_MARKET_WS_URL ?? process.env.NEXT_PUBLIC_GMI_WS_URL)?.trim() ||
           null,
@@ -634,18 +649,39 @@ export default function Dashboard() {
     const apiBase = marketEndpoints.apiBaseUrl;
     if (!apiBase) return;
     const controller = new AbortController();
-    fetch(`${apiBase}/alpha/board?asset_class=commodity&limit=5`, { signal: controller.signal })
+    // Massive contract and bar responses are cached by the backend. The full
+    // catalog remains selectable while this compact board populates summaries.
+    fetch(`${apiBase}/market/board?limit=8`, { signal: controller.signal })
       .then(async (response) => {
-        if (!response.ok) throw new Error(`Alpha board returned ${response.status}`);
+        if (!response.ok) throw new Error(`Market board returned ${response.status}`);
         return response.json() as Promise<{ items?: AlphaBoardItem[] }>;
       })
       .then((payload) => {
         if (controller.signal.aborted) return;
+        const boardItems = Array.isArray(payload.items) ? payload.items : [];
         setAlphaHeatmap(
-          (Array.isArray(payload.items) ? payload.items : [])
+          boardItems
             .map(alphaBoardMetric)
             .filter((metric): metric is HeatmapMetric => metric !== null),
         );
+        setUploadedAssets((current) => {
+          const quotes = new Map(boardItems.map((item) => [item.symbol.toUpperCase(), item]));
+          return current.map((asset) => {
+            const quote = quotes.get(asset.symbol.toUpperCase());
+            if (!quote || typeof quote.price !== "number" || !Number.isFinite(quote.price)) {
+              return asset;
+            }
+            const changePercent = typeof quote.change_percent === "number" && Number.isFinite(quote.change_percent)
+              ? quote.change_percent
+              : 0;
+            return {
+              ...asset,
+              value: quote.price,
+              change: quote.price * changePercent / 100,
+              changePercent,
+            };
+          });
+        });
       })
       .catch(() => {
         if (!controller.signal.aborted) setAlphaHeatmap([]);
@@ -1247,6 +1283,7 @@ export default function Dashboard() {
               timeframe={feed.timeframe}
               timeframes={availableTimeframes}
               marketStatus={selectedAsset.dataSource === "historical_import" || feed.source === "upload" ? "historical" : "live"}
+              isLoading={feed.isLoading}
               onAssetChange={chooseAsset}
               onAlertThresholdChange={setAlertThreshold}
               onTimeframeChange={setSelectedTimeframe}
@@ -1513,7 +1550,7 @@ export default function Dashboard() {
         <Stack spacing={1.2} sx={{ mt: 2 }}>
           {[
             ["Selected market", `${selectedSymbol} · ${selectedAsset.name}`],
-            ["Source", selectedAsset.dataSource === "historical_import" ? "Historical upload" : selectedAsset.dataSource === "alpha_vantage" ? "Alpha Vantage" : "Deterministic simulator"],
+            ["Source", selectedAsset.dataSource === "historical_import" ? "Historical upload" : selectedAsset.dataSource === "massive" ? "Massive" : selectedAsset.dataSource === "twelve_data" ? "Twelve Data" : selectedAsset.dataSource === "alpha_vantage" ? "Alpha Vantage" : "Waiting for live data"],
             ["Timeframe", feed.timeframe.toUpperCase()],
             ["Loaded bars", viewCandles.length.toLocaleString()],
             ["Detected zones", viewZones.length.toLocaleString()],

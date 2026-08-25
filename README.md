@@ -12,7 +12,7 @@ A real-time cross-asset market dashboard and supply/demand zone engine. The proj
 - Sector pressure heatmaps for energy, agriculture, industrial metals, and semiconductors
 - Configurable, timeframe-specific approach, inside-zone, and crossing alerts
 - REST bootstrap plus WebSocket snapshots, with an in-memory cache and optional Redis mirror
-- Alpha Vantage index, FX, commodity, and crypto candles with quota-aware caching
+- Massive futures OHLCV with active-contract resolution and quota-aware caching
 - Deterministic simulation, so the full experience works without market-data credentials
 
 ## Quick start
@@ -38,20 +38,20 @@ uvicorn app.main:app --reload --port 8000
 
 The API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs). Copy `.env.example` to `.env.local` to connect the dashboard to both REST history and the WebSocket stream. Without those variables, the dashboard reports that live API data is unavailable.
 
-### Alpha Vantage live model
+### Massive futures live model
 
-Set `GMI_ALPHA_VANTAGE_API_KEY` in the backend environment, then start both services. The asset selector will expose GMI, SPX, NDX, DJI, EUR/USD, GBP/USD, USD/JPY, BTC/USD, ETH/USD, SOL/USD, WTI, Brent, and natural gas. The browser never receives the API key.
+Set `GMI_MASSIVE_API_KEY` in the backend environment, then start both services. The asset selector exposes GMI plus RTY, ES, NQ, YM, NKD, RB, CL, QM, HO, NG, QG, GC, SI, and HG futures. The browser never receives the API key.
 
-The free-tier-safe default requests daily data: `DIGITAL_CURRENCY_DAILY`, daily commodity functions, and `TIME_SERIES_DAILY` ETF proxies. Intraday is opt-in only; when unavailable, the UI resolves to daily data. Commodity history is daily and close-only by provider contract. A six-hour server cache deduplicates reloads, and the last successful provider result is retained as a stale fallback when the provider or daily quota is unavailable.
+The backend resolves each public root to its nearest active dated contract through Massive's contracts endpoint, then requests 15-minute, 30-minute, 1-hour, 4-hour, or session aggregate bars. GMI is a 50/50 normalized ES/NQ composite. Successful bars and contract resolutions are cached, with stale bars retained across transient provider failures.
 
 ```bash
-export GMI_ALPHA_VANTAGE_API_KEY=your_key_here
+export GMI_MASSIVE_API_KEY=your_key_here
 ```
 
 Alternatively, put the settings in `backend/.env.local` and start the API with
 `uvicorn app.main:app --env-file .env.local --reload --port 8000`.
 
-The free Alpha Vantage service is generally limited to 25 API calls per day and one request per second. The backend serializes provider requests with a 1.1-second minimum interval and enforces the daily budget locally. Increase `GMI_ALPHA_VANTAGE_CACHE_TTL_SECONDS` or set `GMI_ALPHA_VANTAGE_INTRADAY_ENABLED=false` when operating on the free tier.
+The default `GMI_MASSIVE_MIN_REQUEST_INTERVAL_SECONDS=12.2` is safe for a five-request-per-minute key. Paid plans can lower this setting. Increase `GMI_MASSIVE_CACHE_TTL_SECONDS` to reduce repeated chart requests.
 
 ## Import historical data
 

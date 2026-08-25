@@ -36,6 +36,7 @@ import SupplyDemandHeatmap from "./SupplyDemandHeatmap";
 import TickerTape from "./TickerTape";
 import WorldActivityMap from "./WorldActivityMap";
 import ZoneRail from "./ZoneRail";
+import { formatMarketSymbolForDisplay } from "@/lib/market/market-stream-adapter";
 import type {
   ActivityRegion,
   Candle,
@@ -330,6 +331,7 @@ function PerformanceVolumeChart({
   symbol: string;
 }) {
   const rawId = useId().replace(/:/g, "");
+  const displaySymbol = formatMarketSymbolForDisplay(symbol);
   const series = useMemo(() => performanceData(candles, points).slice(-120), [candles, points]);
   if (series.length < 2) {
     return (
@@ -373,7 +375,7 @@ function PerformanceVolumeChart({
 
   return (
     <MarketPanel
-      title={`${symbol} performance & volume`}
+      title={`${displaySymbol} performance & volume`}
       eyebrow="Synchronized history"
       action={<Chip label={`${series.length} bars`} size="small" sx={{ height: 24, color: accent, bgcolor: `${accent}16`, fontSize: "0.56rem", fontWeight: 800 }} />}
       contentSx={{ px: { xs: 1, sm: 2 }, pb: 1.5 }}
@@ -387,7 +389,7 @@ function PerformanceVolumeChart({
           aria-labelledby={`${titleId} ${descriptionId}`}
           sx={{ display: "block", width: "100%", minWidth: 620, height: "auto" }}
         >
-          <title id={titleId}>{symbol} cumulative performance and volume</title>
+          <title id={titleId}>{displaySymbol} cumulative performance and volume</title>
           <desc id={descriptionId}>Cumulative return line aligned with volume bars across {series.length} uploaded market bars.</desc>
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -761,7 +763,7 @@ function AlertLedger({
                 <Stack direction="row" alignItems="center" spacing={0.75}>
                   <StatusDot color={accent} />
                   <Box>
-                    <Typography sx={{ fontSize: "0.65rem", fontWeight: 850 }}>{alert.symbol}</Typography>
+                    <Typography sx={{ fontSize: "0.65rem", fontWeight: 850 }}>{formatMarketSymbolForDisplay(alert.symbol)}</Typography>
                     <Typography sx={{ mt: 0.2, color: marketColors.muted, fontSize: "0.49rem", textTransform: "capitalize" }}>{alert.zoneType} zone</Typography>
                   </Box>
                 </Stack>
@@ -818,7 +820,7 @@ function WatchlistContext({
             >
               <StatusDot color={accent} />
               <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Typography sx={{ fontSize: "0.62rem", fontWeight: 850 }}>{asset.symbol}</Typography>
+                <Typography sx={{ fontSize: "0.62rem", fontWeight: 850 }}>{formatMarketSymbolForDisplay(asset.symbol)}</Typography>
                 <Typography noWrap sx={{ mt: 0.2, color: marketColors.muted, fontSize: "0.49rem" }}>{asset.name}</Typography>
               </Box>
               <Box sx={{ textAlign: "right" }}>

@@ -5,6 +5,7 @@ import TrendingUpRounded from "@mui/icons-material/TrendingUpRounded";
 import { Box, Chip, Stack, Typography } from "@mui/material";
 import { formatMarketValue, marketColors, StatusDot } from "./MarketPanel";
 import type { MarketTicker } from "./types";
+import { formatMarketSymbolForDisplay } from "@/lib/market/market-stream-adapter";
 
 export interface TickerTapeProps {
   items?: MarketTicker[];
@@ -112,7 +113,7 @@ export default function TickerTape({
             >
               <Box sx={{ minWidth: 0, flex: 1 }}>
                 <Stack direction="row" spacing={0.75} alignItems="baseline">
-                  <Typography sx={{ fontSize: "0.71rem", fontWeight: 800 }}>{item.symbol}</Typography>
+                  <Typography sx={{ fontSize: "0.71rem", fontWeight: 800 }}>{formatMarketSymbolForDisplay(item.symbol)}</Typography>
                   <Typography
                     noWrap
                     sx={{ maxWidth: 74, color: marketColors.muted, fontSize: "0.57rem" }}

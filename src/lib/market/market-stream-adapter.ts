@@ -1,5 +1,8 @@
 import type { MarketTimeframe, OhlcvBar, TimestampMs, ZoneSide } from "./types.js";
 
+/** Public production backend; local env values still take precedence. */
+export const DEFAULT_MARKET_API_URL = "https://gmi-backend.vercel.app/api/v1";
+
 export type MarketTimeframeInput =
   | MarketTimeframe
   | "15M"
@@ -75,6 +78,7 @@ export interface NormalizedMarketSnapshot {
   generatedAt: TimestampMs | null;
   prices: Readonly<Record<string, number>>;
   changesPercent: Readonly<Record<string, number>>;
+  volumes: Readonly<Record<string, number>>;
   composite: Readonly<Partial<Record<MarketTimeframe, MarketStreamCandle>>>;
   pressure: readonly MarketStreamPressure[];
   zones: Readonly<Record<string, readonly MarketStreamZone[]>>;
@@ -94,6 +98,7 @@ export interface SelectedMarketSnapshot {
   timeframe: MarketTimeframe;
   currentValue?: number;
   changePercent?: number;
+  volume?: number;
   liveCandle?: MarketStreamCandle;
   pressure: readonly MarketStreamPressure[];
   zones: readonly MarketStreamZone[];
@@ -126,6 +131,7 @@ export interface MarketQuoteUpdate {
   price: number;
   /** Snapshot generation time or local fallback tick time, in epoch milliseconds. */
   generatedAt: TimestampMs;
+  volume?: number;
 }
 
 export interface MarketZoneFilterOptions {
@@ -240,15 +246,27 @@ export function marketReconnectDelayMs(
 export function normalizeMarketSymbol(value: string): string {
   const normalized = value.trim().toUpperCase();
   const aliases: Readonly<Record<string, string>> = {
-    "^GSPC": "SPX",
-    "S&P500": "SPX",
-    "S&P 500": "SPX",
-    SP500: "SPX",
-    "^IXIC": "IXIC",
-    NASDAQ: "IXIC",
-    NDX: "IXIC",
+    "^GSPC": "SPY",
+    SPX: "SPY",
+    "S&P500": "SPY",
+    "S&P 500": "SPY",
+    SP500: "SPY",
+    "^IXIC": "QQQ",
+    IXIC: "QQQ",
+    NASDAQ: "QQQ",
+    NDX: "QQQ",
+    "^DJI": "DIA",
+    DJI: "DIA",
   };
   return aliases[normalized] ?? normalized;
+}
+
+/**
+ * Formats a provider symbol for human-facing labels without changing the
+ * canonical symbol used for Twelve Data requests and stream subscriptions.
+ */
+export function formatMarketSymbolForDisplay(value: string): string {
+  return normalizeMarketSymbol(value).replace(/1!$/, "");
 }
 
 function normalizeApiUrl(value: string): string | undefined {
@@ -529,6 +547,7 @@ export function adaptMarketSnapshot(payload: unknown): NormalizedMarketSnapshot 
   const candidate = isRecord(payload.data) ? payload.data : payload;
   const prices = numericMap(candidate.prices);
   const changesPercent = numericMap(candidate.changes_pct ?? candidate.changesPercent);
+  const volumes = numericMap(candidate.volumes);
   if (Object.keys(prices).length === 0 && !Array.isArray(candidate.pressure)) return undefined;
 
   const composite: Partial<Record<MarketTimeframe, MarketStreamCandle>> = {};
@@ -589,6 +608,7 @@ export function adaptMarketSnapshot(payload: unknown): NormalizedMarketSnapshot 
     generatedAt: timestampMs(candidate.generated_at ?? candidate.generatedAt) ?? null,
     prices,
     changesPercent,
+    volumes,
     composite,
     pressure,
     zones,
@@ -612,6 +632,7 @@ export function selectMarketSnapshot(
     timeframe,
     currentValue: snapshot.prices[symbol] ?? liveCandle?.close,
     changePercent: snapshot.changesPercent[symbol],
+    volume: snapshot.volumes[symbol],
     liveCandle,
     pressure: snapshot.pressure,
     zones: (timeframeZones ?? legacyZones ?? []).filter(
@@ -675,13 +696,14 @@ export function mergeMarketQuoteIntoCandles(
       low: update.price,
       close: update.price,
       volume: 0,
+      ...(update.volume !== undefined ? { volume: update.volume } : {}),
     };
     return [...candles, openingTick].slice(-boundedLimit);
   }
   if (bucketTime < last.time || last.symbol !== symbol || last.timeframe !== timeframe) {
     return candles;
   }
-  if (last.close === update.price) return candles;
+  if (last.close === update.price && update.volume === undefined) return candles;
   return [
     ...candles.slice(0, -1),
     {
@@ -689,6 +711,9 @@ export function mergeMarketQuoteIntoCandles(
       high: Math.max(last.high, update.price),
       low: Math.min(last.low, update.price),
       close: update.price,
+      ...(update.volume !== undefined
+        ? { volume: Math.max(last.volume ?? 0, update.volume) }
+        : {}),
     },
   ];
 }

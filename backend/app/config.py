@@ -37,6 +37,13 @@ class Settings:
     twelve_data_cache_ttl_seconds: float = 900.0
     twelve_data_timeout_seconds: float = 12.0
     twelve_data_min_request_interval_seconds: float = 0.25
+    massive_api_key: str | None = None
+    massive_base_url: str = "https://api.massive.com"
+    massive_cache_ttl_seconds: float = 60.0
+    massive_contract_cache_ttl_seconds: float = 21_600.0
+    massive_timeout_seconds: float = 12.0
+    massive_min_request_interval_seconds: float = 12.2
+    massive_poll_interval_seconds: float = 15.0
     simulation_interval_seconds: float = 1.0
     history_limit: int = 500
     random_seed: int = 17
@@ -64,6 +71,30 @@ class Settings:
             raise ValueError("Alpha Vantage request interval must be between 0 and 60 seconds")
         if not self.alpha_vantage_base_url.startswith(("https://", "http://")):
             raise ValueError("Alpha Vantage base URL must be HTTP(S)")
+        if not isfinite(self.massive_cache_ttl_seconds) or not (
+            5 <= self.massive_cache_ttl_seconds <= 86_400
+        ):
+            raise ValueError("Massive cache TTL must be between 5 and 86400 seconds")
+        if not isfinite(self.massive_contract_cache_ttl_seconds) or not (
+            60 <= self.massive_contract_cache_ttl_seconds <= 604_800
+        ):
+            raise ValueError(
+                "Massive contract cache TTL must be between 60 and 604800 seconds"
+            )
+        if not isfinite(self.massive_timeout_seconds) or not (
+            1 <= self.massive_timeout_seconds <= 120
+        ):
+            raise ValueError("Massive timeout must be between 1 and 120 seconds")
+        if not isfinite(self.massive_min_request_interval_seconds) or not (
+            0 <= self.massive_min_request_interval_seconds <= 60
+        ):
+            raise ValueError("Massive request interval must be between 0 and 60 seconds")
+        if not isfinite(self.massive_poll_interval_seconds) or not (
+            5 <= self.massive_poll_interval_seconds <= 3_600
+        ):
+            raise ValueError("Massive poll interval must be between 5 and 3600 seconds")
+        if not self.massive_base_url.startswith(("https://", "http://")):
+            raise ValueError("Massive base URL must be HTTP(S)")
         if not self.api_prefix.startswith("/"):
             raise ValueError("API prefix must start with '/'")
 
@@ -72,9 +103,12 @@ class Settings:
         redis_url = os.getenv("GMI_REDIS_URL") or None
         alpha_vantage_api_key = os.getenv("GMI_ALPHA_VANTAGE_API_KEY") or None
         twelve_data_api_key = os.getenv("GMI_TWELVE_DATA_API_KEY") or None
+        massive_api_key = os.getenv("GMI_MASSIVE_API_KEY") or None
         return cls(
             app_name=os.getenv("GMI_APP_NAME", "Global Market Index API"),
-            environment=os.getenv("GMI_ENVIRONMENT", "development"),
+            # Vercel deployments are production by default so an absent
+            # Twelve Data secret cannot silently activate the simulator.
+            environment=os.getenv("GMI_ENVIRONMENT", "production"),
             api_prefix=os.getenv("GMI_API_PREFIX", "/api/v1"),
             cors_origins=_csv(
                 os.getenv(
@@ -116,6 +150,25 @@ class Settings:
             ),
             twelve_data_min_request_interval_seconds=float(
                 os.getenv("GMI_TWELVE_DATA_MIN_REQUEST_INTERVAL_SECONDS", "0.25")
+            ),
+            massive_api_key=massive_api_key,
+            massive_base_url=os.getenv(
+                "GMI_MASSIVE_BASE_URL", "https://api.massive.com"
+            ),
+            massive_cache_ttl_seconds=float(
+                os.getenv("GMI_MASSIVE_CACHE_TTL_SECONDS", "60")
+            ),
+            massive_contract_cache_ttl_seconds=float(
+                os.getenv("GMI_MASSIVE_CONTRACT_CACHE_TTL_SECONDS", "21600")
+            ),
+            massive_timeout_seconds=float(
+                os.getenv("GMI_MASSIVE_TIMEOUT_SECONDS", "12")
+            ),
+            massive_min_request_interval_seconds=float(
+                os.getenv("GMI_MASSIVE_MIN_REQUEST_INTERVAL_SECONDS", "12.2")
+            ),
+            massive_poll_interval_seconds=float(
+                os.getenv("GMI_MASSIVE_POLL_INTERVAL_SECONDS", "15")
             ),
             simulation_interval_seconds=float(
                 os.getenv("GMI_SIMULATION_INTERVAL_SECONDS", "1.0")

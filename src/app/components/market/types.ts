@@ -25,7 +25,7 @@ export interface IndexAssetOption {
   method: string;
   componentCount: number;
   assetClass?: "index" | "forex" | "commodity" | "crypto" | "custom";
-  dataSource?: "alpha_vantage" | "historical_import" | "simulator";
+  dataSource?: "massive" | "twelve_data" | "alpha_vantage" | "historical_import" | "simulator";
   priceBasis?: string;
   supportedTimeframes?: ChartTimeframe[];
 }

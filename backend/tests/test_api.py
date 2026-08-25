@@ -3,9 +3,9 @@ import unittest
 import httpx
 from fastapi.testclient import TestClient
 
-from app.alpha_vantage import AlphaVantageClient
 from app.config import Settings
 from app.main import create_app
+from app.massive import MassiveClient
 
 
 class ApiContractTests(unittest.TestCase):
@@ -29,11 +29,19 @@ class ApiContractTests(unittest.TestCase):
                 ["SPX", "IXIC"],
             )
             self.assertFalse(assets["provider"]["configured"])
-            self.assertEqual(assets["provider"]["name"], "alpha_vantage")
+            self.assertEqual(assets["provider"]["name"], "massive")
             self.assertEqual(assets["live_assets"], [])
             self.assertEqual(
                 {item["asset_class"] for item in assets["asset_catalog"]},
-                {"index", "forex", "crypto", "commodity"},
+                {"index", "commodity"},
+            )
+            self.assertEqual(
+                [item["symbol"] for item in assets["asset_catalog"]],
+                [
+                    "GMI",
+                    "RTY", "ES", "NQ", "YM", "NKD", "RB", "CL", "QM",
+                    "HO", "NG", "QG", "GC", "SI", "HG",
+                ],
             )
 
             snapshot = client.get("/api/v1/snapshot").json()
@@ -145,11 +153,12 @@ class ApiContractTests(unittest.TestCase):
             self.assertEqual(imported.status_code, 422)
             self.assertIn("OHLC", imported.json()["detail"])
 
-    def test_serves_alpha_vantage_daily_fallback_through_market_contract(self) -> None:
+    def test_serves_massive_futures_through_market_contract(self) -> None:
         live_settings = Settings(
-            alpha_vantage_api_key="test-key",
-            alpha_vantage_base_url="https://alpha.test/query",
-            alpha_vantage_intraday_enabled=True,
+            environment="production",
+            massive_api_key="test-key",
+            massive_base_url="https://massive.test",
+            massive_min_request_interval_seconds=0,
             redis_url=None,
             simulation_interval_seconds=60,
             history_limit=40,
@@ -157,44 +166,57 @@ class ApiContractTests(unittest.TestCase):
         )
 
         def handler(request: httpx.Request) -> httpx.Response:
-            function = request.url.params["function"]
-            if function == "FX_INTRADAY":
+            if request.url.path == "/futures/v1/contracts":
                 return httpx.Response(
                     200,
-                    json={"Information": "Premium endpoint; please subscribe."},
+                    json={
+                        "status": "OK",
+                        "results": [
+                            {
+                                "active": True,
+                                "product_code": "ES",
+                                "ticker": "ESU6",
+                                "last_trade_date": "2026-09-18",
+                            }
+                        ],
+                    },
                 )
             return httpx.Response(
                 200,
                 json={
-                    "Time Series FX (Daily)": {
-                        "2026-08-21": {
-                            "1. open": "1.1700",
-                            "2. high": "1.1800",
-                            "3. low": "1.1600",
-                            "4. close": "1.1750",
+                    "status": "OK",
+                    "results": [
+                        {
+                            "ticker": "ESU6",
+                            "window_start": 1787529600000000000,
+                            "open": 6500,
+                            "high": 6550,
+                            "low": 6480,
+                            "close": 6535,
+                            "volume": 1000,
                         }
-                    }
+                    ],
                 },
             )
 
-        alpha = AlphaVantageClient(
+        massive = MassiveClient(
             live_settings,
             transport=httpx.MockTransport(handler),
         )
-        with TestClient(create_app(live_settings, alpha_vantage=alpha)) as client:
+        with TestClient(create_app(live_settings, massive_client=massive)) as client:
             self.assertTrue(client.get("/api/v1/assets").json()["live_assets"])
             response = client.get(
                 "/api/v1/index/candles",
-                params={"symbol": "EURUSD", "timeframe": "1h"},
+                params={"symbol": "ES", "timeframe": "1h"},
             )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["requested_timeframe"], "1h")
-        self.assertEqual(payload["timeframe"], "1d")
-        self.assertEqual(payload["candles"][0]["close"], 1.175)
-        self.assertEqual(payload["source"]["provider"], "alpha_vantage")
-        self.assertIn("Intraday entitlement unavailable", payload["source"]["fallback_reason"])
+        self.assertEqual(payload["timeframe"], "1h")
+        self.assertEqual(payload["candles"][0]["close"], 6535)
+        self.assertEqual(payload["source"]["provider"], "massive")
+        self.assertEqual(payload["source"]["provider_symbol"], "ESU6")
 
 
 if __name__ == "__main__":

@@ -47,6 +47,7 @@ export interface MarketDashboardContentProps {
   lastUpdated?: string;
   timeframes?: ChartTimeframe[];
   marketStatus?: "live" | "open" | "closed" | "historical";
+  isLoading?: boolean;
 }
 
 export default function MarketDashboardContent({
@@ -75,6 +76,7 @@ export default function MarketDashboardContent({
   lastUpdated,
   timeframes,
   marketStatus,
+  isLoading,
 }: MarketDashboardContentProps) {
   const [localSymbol, setLocalSymbol] = useState(symbol);
   const [localThreshold, setLocalThreshold] = useState(0.5);
@@ -133,6 +135,7 @@ export default function MarketDashboardContent({
           timeframe={timeframe}
           timeframes={timeframes}
           onTimeframeChange={handleTimeframeChange}
+          isLoading={isLoading}
         />
         <ZoneRail
           zones={zones ?? []}

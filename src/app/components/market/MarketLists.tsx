@@ -7,6 +7,7 @@ import TuneRounded from "@mui/icons-material/TuneRounded";
 import { Box, Button, Chip, IconButton, Stack, Typography } from "@mui/material";
 import { formatMarketValue, marketColors, MarketPanel, StatusDot } from "./MarketPanel";
 import type { MarketAlert, WatchlistAsset } from "./types";
+import { formatMarketSymbolForDisplay } from "@/lib/market/market-stream-adapter";
 
 export interface AlertsPanelProps {
   alerts?: MarketAlert[];
@@ -79,7 +80,7 @@ export function AlertsPanel({
               </Box>
               <Box sx={{ minWidth: 0, flex: 1 }}>
                 <Stack direction="row" alignItems="center" spacing={0.75}>
-                  <Typography sx={{ fontSize: "0.68rem", fontWeight: 850 }}>{alert.symbol}</Typography>
+                  <Typography sx={{ fontSize: "0.68rem", fontWeight: 850 }}>{formatMarketSymbolForDisplay(alert.symbol)}</Typography>
                   <Chip
                     label={alert.zoneType}
                     size="small"
@@ -199,7 +200,7 @@ export function WatchlistStrip({
             >
               <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
                 <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ fontSize: "0.7rem", fontWeight: 850 }}>{asset.symbol}</Typography>
+                  <Typography sx={{ fontSize: "0.7rem", fontWeight: 850 }}>{formatMarketSymbolForDisplay(asset.symbol)}</Typography>
                   <Typography noWrap sx={{ mt: 0.2, maxWidth: 90, color: marketColors.muted, fontSize: "0.52rem" }}>{asset.name}</Typography>
                 </Box>
                 <Stack direction="row" alignItems="center" spacing={0.55}>

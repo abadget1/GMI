@@ -3,5 +3,8 @@
     "env": {
       "PYTHONPATH": "."
     }
+  },
+  "env": {
+    "GMI_ENVIRONMENT": "production"
   }
 }

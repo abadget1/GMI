@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any, Mapping
 
@@ -15,38 +15,72 @@ from .domain import Candle, Timeframe, primitive
 
 
 TWELVE_SYMBOLS: dict[str, str] = {
-    "SPX": "SPY",
-    "NDX": "QQQ",
-    "DJI": "DIA",
-    "EURUSD": "EUR/USD",
-    "GBPUSD": "GBP/USD",
-    "USDJPY": "USD/JPY",
-    "BTCUSD": "BTC/USD",
-    "ETHUSD": "ETH/USD",
-    "SOLUSD": "SOL/USD",
-    "WTI": "WTI/USD",
-    "BRENT": "BRENT/USD",
-    "NATURAL_GAS": "NATURALGAS/USD",
-    "COPPER": "HG1",
-    "WHEAT": "WHEAT/USD",
+    # ETFs are private GMI constituents and are not exposed in the asset list.
+    "SPY": "SPY",
+    "QQQ": "QQQ",
+    # Public continuous futures identifiers.
+    "RTY": "RTY1!",
+    "ES": "ES1!",
+    "NQ": "NQ1!",
+    "YM": "YM1!",
+    "NKD": "NKD1!",
+    "RB": "RB1!",
+    "CL": "CL1!",
+    "QM": "QM1!",
+    "HO": "HO1!",
+    "NG": "NG1!",
+    "QG": "QG1!",
+    "GC": "GC1!",
+    "SI": "SI1!",
+    "HG": "HG1!",
 }
 
 TWELVE_ASSET_CLASSES: dict[str, str] = {
-    "SPX": "index",
-    "NDX": "index",
-    "DJI": "index",
-    "EURUSD": "forex",
-    "GBPUSD": "forex",
-    "USDJPY": "forex",
-    "BTCUSD": "crypto",
-    "ETHUSD": "crypto",
-    "SOLUSD": "crypto",
-    "WTI": "commodity",
-    "BRENT": "commodity",
-    "NATURAL_GAS": "commodity",
-    "COPPER": "commodity",
-    "WHEAT": "commodity",
+    "RTY": "index",
+    "ES": "index",
+    "NQ": "index",
+    "YM": "index",
+    "NKD": "index",
+    "RB": "commodity",
+    "CL": "commodity",
+    "QM": "commodity",
+    "HO": "commodity",
+    "NG": "commodity",
+    "QG": "commodity",
+    "GC": "commodity",
+    "SI": "commodity",
+    "HG": "commodity",
 }
+
+TWELVE_ASSET_NAMES: dict[str, str] = {
+    "RTY": "Russell 2000 E-mini",
+    "ES": "S&P 500 E-mini",
+    "NQ": "Nasdaq-100 E-mini",
+    "YM": "Dow Jones E-mini",
+    "NKD": "Nikkei 225 E-mini",
+    "RB": "RBOB Gasoline",
+    "CL": "WTI Crude Oil",
+    "QM": "E-mini Crude Oil",
+    "HO": "Heating Oil",
+    "NG": "Natural Gas",
+    "QG": "E-mini Natural Gas",
+    "GC": "Gold",
+    "SI": "Silver",
+    "HG": "Copper",
+}
+
+TWELVE_SYMBOL_ALIASES: dict[str, str] = {
+    "SPX": "SPY",
+    "NDX": "QQQ",
+    "IXIC": "QQQ",
+}
+
+TWELVE_PUBLIC_SYMBOLS: tuple[str, ...] = tuple(TWELVE_ASSET_CLASSES)
+
+
+def canonical_symbol(value: str) -> str:
+    normalized = value.strip().upper()
+    return TWELVE_SYMBOL_ALIASES.get(normalized, normalized)
 
 
 class TwelveDataError(RuntimeError):
@@ -126,6 +160,8 @@ class TwelveDataClient:
         )
         self._cache: dict[tuple[str, Timeframe], tuple[float, TwelveSeriesResult]] = {}
         self._stale_cache: dict[tuple[str, Timeframe], TwelveSeriesResult] = {}
+        self._quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._board_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._request_lock = asyncio.Lock()
         self._last_request_started = 0.0
 
@@ -186,6 +222,7 @@ class TwelveDataClient:
     async def _get_symbol_candles(
         self, symbol: str, timeframe: Timeframe, limit: int
     ) -> TwelveSeriesResult:
+        symbol = canonical_symbol(symbol)
         provider_symbol = TWELVE_SYMBOLS.get(symbol, symbol)
         payload = await self._get(
             "time_series",
@@ -234,6 +271,48 @@ class TwelveDataClient:
             fetched_at=now,
         )
 
+    def _quote_item(self, symbol: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        provider_symbol = TWELVE_SYMBOLS.get(symbol, symbol)
+        price = _number(payload.get("close") or payload.get("price"))
+        if price is None or price <= 0:
+            raise TwelveDataError(f"No current quote returned for {provider_symbol}")
+        previous = _number(payload.get("previous_close"))
+        change_percent = _number(payload.get("percent_change"))
+        if change_percent is None and previous and previous > 0:
+            change_percent = ((price / previous) - 1) * 100
+        try:
+            quote_timestamp = _timestamp(payload["datetime"]) if payload.get("datetime") else datetime.now(timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            quote_timestamp = datetime.now(timezone.utc)
+        # Twelve Data can return a date-only/local-market timestamp for quote
+        # snapshots. Never advertise a future update to the UI; the quote was
+        # fetched now, so use the fetch time when the provider timestamp is
+        # materially ahead of the server clock.
+        now = datetime.now(timezone.utc)
+        if quote_timestamp > now + timedelta(minutes=5):
+            quote_timestamp = now
+        item = {
+            "symbol": symbol,
+            "name": TWELVE_ASSET_NAMES.get(symbol, symbol),
+            "asset_class": TWELVE_ASSET_CLASSES.get(symbol, "market"),
+            "price": price,
+            "change_percent": change_percent,
+            "timestamp": quote_timestamp,
+            "volume": _number(payload.get("volume")) or 0.0,
+            "provider": "twelve_data",
+            "provider_symbol": provider_symbol,
+        }
+        self._quote_cache[symbol] = (time.monotonic(), item)
+        return item
+
+    async def _get_quote(self, symbol: str) -> dict[str, Any]:
+        symbol = canonical_symbol(symbol)
+        cached = self._quote_cache.get(symbol)
+        if cached and time.monotonic() - cached[0] < min(30.0, self.cache_ttl_seconds):
+            return cached[1]
+        payload = await self._get("quote", {"symbol": TWELVE_SYMBOLS.get(symbol, symbol)})
+        return self._quote_item(symbol, payload)
+
     async def _get_gmi(self, timeframe: Timeframe, limit: int) -> TwelveSeriesResult:
         spy, qqq = await asyncio.gather(
             self._get_symbol_candles("SPX", timeframe, limit),
@@ -274,7 +353,7 @@ class TwelveDataClient:
         )
 
     async def get_candles(self, symbol: str, timeframe: Timeframe, limit: int = 500) -> TwelveSeriesResult:
-        normalized = symbol.upper()
+        normalized = canonical_symbol(symbol)
         key = (normalized, timeframe)
         cached = self._cache.get(key)
         if cached and time.monotonic() - cached[0] < self.cache_ttl_seconds:
@@ -291,30 +370,54 @@ class TwelveDataClient:
         return result
 
     async def get_board(self, asset_class: str | None = None, limit: int = 8) -> list[dict[str, Any]]:
+        cache_key = f"{asset_class or '*'}:{max(1, min(len(TWELVE_SYMBOLS), int(limit)))}"
+        cached = self._board_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < min(30.0, self.cache_ttl_seconds):
+            return cached[1]
         symbols = [
             symbol
             for symbol, kind in TWELVE_ASSET_CLASSES.items()
             if asset_class is None or kind == asset_class
-        ][: max(1, min(8, int(limit)))]
+        ][: max(1, min(len(TWELVE_SYMBOLS), int(limit)))]
         items: list[dict[str, Any]] = []
-        for symbol in symbols:
-            try:
-                result = await self.get_candles(symbol, Timeframe.D1, 2)
-            except TwelveDataError:
-                continue
-            latest = result.candles[-1] if result.candles else None
-            previous = result.candles[-2] if len(result.candles) > 1 else None
-            if not latest:
-                continue
-            change = ((latest.close / previous.close) - 1) * 100 if previous and previous.close > 0 else None
-            items.append({
-                "symbol": symbol,
-                "name": symbol,
-                "asset_class": TWELVE_ASSET_CLASSES[symbol],
-                "price": latest.close,
-                "change_percent": change,
-                "timestamp": latest.timestamp,
-                "volume": latest.volume,
-                "provider": "twelve_data",
-            })
+        provider_symbols = [TWELVE_SYMBOLS[symbol] for symbol in symbols]
+        try:
+            payload = await self._get("quote", {"symbol": ",".join(provider_symbols)})
+            for symbol, provider_symbol in zip(symbols, provider_symbols):
+                raw = payload.get(provider_symbol) or payload.get(symbol)
+                if not isinstance(raw, Mapping):
+                    # A one-symbol batch may return the quote object directly.
+                    raw = payload if str(payload.get("symbol", "")).upper() == provider_symbol.upper() else None
+                if isinstance(raw, Mapping):
+                    try:
+                        items.append(self._quote_item(symbol, raw))
+                    except TwelveDataError:
+                        continue
+        except TwelveDataRateLimitError:
+            raise
+        except TwelveDataError:
+            # Preserve historical board availability when a symbol is not
+            # entitled to real-time quotes, while keeping the source Twelve Data.
+            for symbol in symbols:
+                try:
+                    result = await self.get_candles(symbol, Timeframe.D1, 2)
+                except TwelveDataError:
+                    continue
+                latest = result.candles[-1] if result.candles else None
+                previous = result.candles[-2] if len(result.candles) > 1 else None
+                if latest:
+                    items.append({
+                        "symbol": symbol,
+                        "name": TWELVE_ASSET_NAMES.get(symbol, symbol),
+                        "asset_class": TWELVE_ASSET_CLASSES[symbol],
+                        "price": latest.close,
+                        "change_percent": ((latest.close / previous.close) - 1) * 100
+                        if previous and previous.close > 0
+                        else None,
+                        "timestamp": latest.timestamp,
+                        "volume": latest.volume,
+                        "provider": "twelve_data",
+                        "provider_symbol": TWELVE_SYMBOLS[symbol],
+                    })
+        self._board_cache[cache_key] = (time.monotonic(), items)
         return items

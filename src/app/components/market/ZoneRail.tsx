@@ -6,6 +6,7 @@ import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import { Box, Chip, Stack, Typography } from "@mui/material";
 import { formatMarketValue, marketColors, MarketPanel } from "./MarketPanel";
 import type { PriceZone } from "./types";
+import { formatMarketSymbolForDisplay } from "@/lib/market/market-stream-adapter";
 
 export interface ZoneRailProps {
   zones?: PriceZone[];
@@ -110,7 +111,7 @@ export default function ZoneRail({
             boxShadow: `0 0 0 4px ${marketColors.demandSoft}, 0 8px 25px rgba(0,0,0,0.25)`,
           }}
         >
-          <Typography sx={{ color: marketColors.muted, fontSize: "0.5rem", fontWeight: 750, letterSpacing: "0.09em" }}>{symbol} LIVE</Typography>
+          <Typography sx={{ color: marketColors.muted, fontSize: "0.5rem", fontWeight: 750, letterSpacing: "0.09em" }}>{formatMarketSymbolForDisplay(symbol)} LIVE</Typography>
           <Typography sx={{ mt: 0.15, fontSize: "0.9rem", fontWeight: 850 }}>{formatMarketValue(currentValue)}</Typography>
         </Box>
       </Box>

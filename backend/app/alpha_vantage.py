@@ -35,7 +35,7 @@ class AlphaAssetSpec:
     def public_contract(self) -> dict[str, Any]:
         basis = "direct"
         if self.asset_class is AlphaAssetClass.INDEX and self.proxy_symbol:
-            basis = f"{self.proxy_symbol} ETF proxy via TIME_SERIES_DAILY"
+            basis = f"{self.proxy_symbol} ETF proxy via provider time series"
         elif self.asset_class is AlphaAssetClass.COMMODITY:
             basis = "official close-only commodity series"
         return {

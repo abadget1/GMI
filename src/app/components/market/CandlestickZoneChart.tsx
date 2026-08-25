@@ -8,6 +8,7 @@ import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import { Box, Button, Chip, Dialog, DialogContent, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import { formatMarketValue, marketColors, MarketPanel, StatusDot } from "./MarketPanel";
 import type { Candle, PriceZone } from "./types";
+import { formatMarketSymbolForDisplay } from "@/lib/market/market-stream-adapter";
 
 export interface CandlestickZoneChartProps {
   candles?: Candle[];
@@ -21,6 +22,7 @@ export interface CandlestickZoneChartProps {
   initialTimeframe?: string;
   timeframes?: string[];
   onTimeframeChange?: (timeframe: string) => void;
+  isLoading?: boolean;
   /** Disable the independent expanded view for a chart rendered in a dialog. */
   enableExpand?: boolean;
   onExpand?: () => void;
@@ -88,11 +90,13 @@ function CandlestickChartPanel({
   initialTimeframe = "15m",
   timeframes = ["15m", "30m", "1h", "4h", "1d"],
   onTimeframeChange,
+  isLoading = false,
   enableExpand = true,
   onExpand,
 }: CandlestickZoneChartProps) {
   const [localTimeframe, setLocalTimeframe] = useState(initialTimeframe);
   const activeTimeframe = controlledTimeframe ?? localTimeframe;
+  const displaySymbol = formatMarketSymbolForDisplay(symbol);
   const svgId = useId().replace(/:/g, "");
   const fadeId = `${svgId}-fade`;
   const gridId = `${svgId}-grid`;
@@ -171,7 +175,7 @@ function CandlestickChartPanel({
               </Box>
               <Box>
                 <Typography component="h2" sx={{ fontSize: "0.95rem", fontWeight: 850 }}>
-                  {symbol}
+                  {displaySymbol}
                 </Typography>
                 <Typography sx={{ mt: 0.25, color: marketColors.muted, fontSize: "0.62rem" }}>
                   {name}
@@ -204,11 +208,11 @@ function CandlestickChartPanel({
                 );
               })}
               {enableExpand && onExpand && (
-                <Tooltip title={`Open ${symbol} chart`}>
+                <Tooltip title={`Open ${displaySymbol} chart`}>
                   <IconButton
                     size="small"
                     onClick={onExpand}
-                    aria-label={`Open ${symbol} candlestick chart`}
+                    aria-label={`Open ${displaySymbol} candlestick chart`}
                     sx={{ width: 29, height: 29, color: marketColors.cyan, border: `1px solid ${marketColors.line}`, borderRadius: "8px" }}
                   >
                     <OpenInFullRounded sx={{ fontSize: 15 }} />
@@ -233,10 +237,14 @@ function CandlestickChartPanel({
           >
             <Box>
               <Typography sx={{ fontSize: "0.82rem", fontWeight: 800 }}>
-                No {timeframeLabel(activeTimeframe)} bars for {symbol}
+                {isLoading
+                  ? `Loading ${timeframeLabel(activeTimeframe)} bars for ${displaySymbol}`
+                  : `No ${timeframeLabel(activeTimeframe)} bars for ${displaySymbol}`}
               </Typography>
               <Typography sx={{ mt: 0.6, color: marketColors.muted, fontSize: "0.62rem" }}>
-                Select an imported timeframe or upload OHLCV data for this interval.
+                {isLoading
+                  ? "Synchronizing the selected provider dataset…"
+                  : "Select an imported timeframe or upload OHLCV data for this interval."}
               </Typography>
             </Box>
           </Box>
@@ -276,7 +284,7 @@ function CandlestickChartPanel({
               <Box>
                 <Stack direction="row" alignItems="baseline" spacing={0.8}>
                   <Typography component="h2" sx={{ fontSize: "0.95rem", fontWeight: 850 }}>
-                    {symbol}
+                    {displaySymbol}
                   </Typography>
                   <Typography sx={{ color: marketColors.muted, fontSize: "0.64rem" }}>{name}</Typography>
                 </Stack>
@@ -319,11 +327,11 @@ function CandlestickChartPanel({
               );
             })}
             {enableExpand && onExpand && (
-              <Tooltip title={`Open ${symbol} chart`}>
+              <Tooltip title={`Open ${displaySymbol} chart`}>
                 <IconButton
                   size="small"
                   onClick={onExpand}
-                  aria-label={`Open ${symbol} candlestick chart`}
+                  aria-label={`Open ${displaySymbol} candlestick chart`}
                   sx={{ width: 29, height: 29, color: marketColors.cyan, border: `1px solid ${marketColors.line}`, borderRadius: "8px" }}
                 >
                   <OpenInFullRounded sx={{ fontSize: 15 }} />
@@ -361,7 +369,7 @@ function CandlestickChartPanel({
           component="svg"
           viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
           role="img"
-          aria-label={`${symbol} candlestick chart with supply and demand zones on the ${timeframeLabel(activeTimeframe)} timeframe`}
+          aria-label={`${displaySymbol} candlestick chart with supply and demand zones on the ${timeframeLabel(activeTimeframe)} timeframe`}
           sx={{ display: "block", width: "100%", height: { xs: 330, sm: 390 } }}
         >
           <defs>
@@ -631,7 +639,7 @@ export default function CandlestickZoneChart(props: CandlestickZoneChartProps) {
             <Stack direction="row" justifyContent="flex-end" sx={{ px: 0.5, pt: 0.25 }}>
               <IconButton
                 onClick={() => setExpanded(false)}
-                aria-label={`Close ${props.symbol ?? "market"} chart`}
+                aria-label={`Close ${formatMarketSymbolForDisplay(props.symbol ?? "market")} chart`}
                 sx={{ color: marketColors.muted }}
               >
                 <CloseRounded sx={{ fontSize: 19 }} />

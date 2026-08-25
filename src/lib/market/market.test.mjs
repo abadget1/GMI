@@ -13,6 +13,7 @@ import {
   adaptZoneResponse,
   buildMarketRestUrls,
   filterMarketZones,
+  formatMarketSymbolForDisplay,
   marketBucketAdvanced,
   marketBucketStart,
   marketReconnectDelayMs,
@@ -66,6 +67,13 @@ test("normalizes nominal prices before equal-weight composite aggregation", () =
     (({ open, high, low, close }) => ({ open, high, low, close }))(result.bars[1]),
     { open: 1_000, high: 1_150, low: 950, close: 1_100 },
   );
+});
+
+test("formats continuous futures symbols for UI labels without changing provider symbols", () => {
+  assert.equal(formatMarketSymbolForDisplay("ES1!"), "ES");
+  assert.equal(formatMarketSymbolForDisplay("NQ1!"), "NQ");
+  assert.equal(formatMarketSymbolForDisplay("SPY"), "SPY");
+  assert.equal(formatMarketSymbolForDisplay("ES!"), "ES!");
 });
 
 test("supports market-cap weights and normalized cross-component wick extremes", () => {
@@ -201,7 +209,7 @@ test("demo data is deterministic and contains both directional zone patterns", (
 
 test("normalizes UI timeframe/symbol aliases and derives matching API/WS endpoints", () => {
   assert.equal(normalizeMarketTimeframe("1D"), "1d");
-  assert.equal(normalizeMarketSymbol("ndx"), "IXIC");
+  assert.equal(normalizeMarketSymbol("ndx"), "QQQ");
   assert.deepEqual(resolveMarketEndpoints({ apiUrl: "http://localhost:8000" }), {
     apiBaseUrl: "http://localhost:8000/api/v1",
     wsUrl: "ws://localhost:8000/ws/market",
@@ -217,11 +225,11 @@ test("normalizes UI timeframe/symbol aliases and derives matching API/WS endpoin
   });
   assert.equal(
     urls.candles,
-    "http://localhost:8000/api/v1/index/candles?symbol=IXIC&timeframe=1d&limit=500",
+    "http://localhost:8000/api/v1/index/candles?symbol=QQQ&timeframe=1d&limit=500",
   );
   assert.equal(
     urls.zones,
-    "http://localhost:8000/api/v1/zones/IXIC?timeframe=1d&include_tested=false&min_quality=72.5",
+    "http://localhost:8000/api/v1/zones/QQQ?timeframe=1d&include_tested=false&min_quality=72.5",
   );
 });
 
@@ -275,8 +283,8 @@ test("adapts REST candle and zone payloads with exact structural timestamps", ()
   );
 
   assert.equal(candles[0].time, Date.parse("2026-08-21T00:00:00Z"));
-  assert.equal(candles[0].symbol, "SPX");
-  assert.equal(zones[0].symbol, "SPX");
+  assert.equal(candles[0].symbol, "SPY");
+  assert.equal(zones[0].symbol, "SPY");
   assert.equal(zones[0].baseTimestamp, Date.parse("2026-08-18T00:00:00Z"));
   assert.equal(zones[0].impulseStart, Date.parse("2026-08-19T00:00:00Z"));
   assert.equal(zones[0].impulseEnd, Date.parse("2026-08-20T00:00:00Z"));
@@ -289,8 +297,8 @@ test("unwraps a full WS snapshot and selects symbol/timeframe data", () => {
     data: {
       sequence: 42,
       generated_at: "2026-08-21T20:00:00Z",
-      prices: { GMI: 1092.79, SPX: 6476.18 },
-      changes_pct: { GMI: 0.45, SPX: 0.33 },
+      prices: { GMI: 1092.79, SPY: 6476.18 },
+      changes_pct: { GMI: 0.45, SPY: 0.33 },
       composite: {
         "1d": {
           symbol: "GMI",
@@ -399,7 +407,7 @@ test("rolls constituent quotes into canonical buckets with coherent OHLC", () =>
   const start = Date.parse("2026-08-21T20:00:00Z");
   const candles = [
     {
-      symbol: "SPX",
+      symbol: "SPY",
       timeframe: "15m",
       time: start,
       open: 6470,
@@ -410,13 +418,13 @@ test("rolls constituent quotes into canonical buckets with coherent OHLC", () =>
     },
   ];
   const sameBucket = mergeMarketQuoteIntoCandles(candles, {
-    symbol: "SPX",
+    symbol: "SPY",
     timeframe: "15m",
     price: 6481,
     generatedAt: Date.parse("2026-08-21T20:14:59Z"),
   });
   const nextBucket = mergeMarketQuoteIntoCandles(sameBucket, {
-    symbol: "SPX",
+      symbol: "SPY",
     timeframe: "15m",
     price: 6472,
     generatedAt: Date.parse("2026-08-21T20:15:01Z"),

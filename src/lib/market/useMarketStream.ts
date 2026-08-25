@@ -6,6 +6,7 @@ import {
   adaptMarketSnapshot,
   adaptZoneResponse,
   buildMarketRestUrls,
+  DEFAULT_MARKET_API_URL,
   filterMarketZones,
   marketBucketAdvanced,
   marketReconnectDelayMs,
@@ -83,7 +84,9 @@ interface ResolvedHookOptions {
 
 function publicEnvironmentEndpoints(options: UseMarketStreamOptions): MarketEndpointInput {
   const environmentApi =
-    process.env.NEXT_PUBLIC_MARKET_API_URL ?? process.env.NEXT_PUBLIC_GMI_API_URL;
+    process.env.NEXT_PUBLIC_MARKET_API_URL ??
+    process.env.NEXT_PUBLIC_GMI_API_URL ??
+    DEFAULT_MARKET_API_URL;
   const environmentWs =
     process.env.NEXT_PUBLIC_MARKET_WS_URL ?? process.env.NEXT_PUBLIC_GMI_WS_URL;
   return {
@@ -240,6 +243,7 @@ export function useMarketStream(
     let latestRestRequest = 0;
     let latestAppliedRestRequest = 0;
     let lastObservedTickAt: number | undefined;
+    let lastSocketCommitAt = 0;
 
     queueMicrotask(() => {
       if (disposed) return;
@@ -280,11 +284,48 @@ export function useMarketStream(
         minZoneQuality,
       });
       const requestedAt = Date.now();
-      const [candleResult, zoneResult, snapshotResult] = await Promise.allSettled([
-        fetchJson(urls.candles, controller.signal),
-        fetchJson(urls.zones, controller.signal),
-        fetchJson(urls.snapshot, controller.signal),
-      ]);
+      const candlePromise = fetchJson(urls.candles, controller.signal);
+      const zonePromise = fetchJson(urls.zones, controller.signal);
+      // REST-only deployments do not need a third bootstrap request. Candle
+      // and zone routes already carry the selected market's full contract.
+      const snapshotPromise = wsUrl
+        ? fetchJson(urls.snapshot, controller.signal)
+        : Promise.resolve(undefined);
+      const secondaryPromise = Promise.allSettled([zonePromise, snapshotPromise]);
+      let candleResult: PromiseSettledResult<unknown>;
+      try {
+        const candlePayload = await candlePromise;
+        candleResult = { status: "fulfilled", value: candlePayload };
+        const earlyCandles = adaptCandleResponse(candlePayload, symbol, timeframe);
+        if (!disposed && requestId === latestRestRequest && earlyCandles.length > 0) {
+          const latest = earlyCandles.at(-1);
+          const previous = earlyCandles.at(-2);
+          const earlyChange = latest && previous && previous.close > 0
+            ? ((latest.close / previous.close) - 1) * 100
+            : undefined;
+          const effectiveTimeframe = latest?.timeframe;
+          if (effectiveTimeframe && effectiveTimeframe !== timeframe) {
+            onTimeframeResolved?.(effectiveTimeframe);
+          }
+          const receivedAt = Date.now();
+          setState((current) => ({
+            ...current,
+            timeframe: effectiveTimeframe ?? current.timeframe,
+            currentValue: latest?.close ?? current.currentValue,
+            changePercent: earlyChange ?? current.changePercent,
+            status: current.status === "connected" || !wsUrl ? "connected" : "connecting",
+            source: current.source === "websocket" ? "websocket" : "rest",
+            latencyMs: receivedAt - requestedAt,
+            updatedAt: new Date(receivedAt),
+            isLoading: true,
+            error: null,
+            candles: earlyCandles,
+          }));
+        }
+      } catch (reason) {
+        candleResult = { status: "rejected", reason };
+      }
+      const [zoneResult, snapshotResult] = await secondaryPromise;
       if (disposed || requestId < latestAppliedRestRequest) return false;
 
       const candles =
@@ -375,7 +416,13 @@ export function useMarketStream(
           if (quoteTime !== undefined) {
             nextCandles = mergeMarketQuoteIntoCandles(
               nextCandles,
-              { symbol, timeframe, price: quotePrice, generatedAt: quoteTime },
+              {
+                symbol,
+                timeframe,
+                price: quotePrice,
+                generatedAt: quoteTime,
+                volume: selected?.volume,
+              },
               candleLimit,
             );
           }
@@ -455,7 +502,12 @@ export function useMarketStream(
             const snapshot = adaptMarketSnapshot(JSON.parse(String(event.data)) as unknown);
             if (!snapshot) return;
             if (snapshot.sequence > 0 && snapshot.sequence < lastWireSequence) return;
+            // Twelve Data can deliver quote ticks several times per second.
+            // Keep the latest sequence for ordering, but commit at most once
+            // per animation-friendly interval to avoid chart/UI thrashing.
+            if (receivedAt - lastSocketCommitAt < 100) return;
             lastWireSequence = snapshot.sequence;
+            lastSocketCommitAt = receivedAt;
             reconnectAttempt = 0;
             const selected = selectMarketSnapshot(snapshot, symbol, timeframe);
             if (snapshot.generatedAt !== null) observeTickBucket(snapshot.generatedAt);
@@ -483,6 +535,7 @@ export function useMarketStream(
                         timeframe,
                         price: selected.currentValue,
                         generatedAt: snapshot.generatedAt,
+                        volume: selected.volume,
                       },
                       candleLimit,
                     )
